@@ -20,8 +20,8 @@ load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 FLICKR_API_KEY = os.getenv("FLICKR_API_KEY")
 CONFIG_FILE = "config.json"
-USED_TERMS_FILE = "used_terms.json"
-TERMS_FILE = "brevity_terms.json"
+CONFIG_FILE = "/data/config.json"
+USED_TERMS_FILE = "/data/used_terms.json"
 
 bot = commands.Bot(command_prefix="!bb", intents=discord.Intents.all())
 
@@ -187,7 +187,6 @@ async def newterm(ctx):
     letter = term['term'][0].upper()
     wiki_url = f"https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code#{letter}"
 
-    await ctx.send("Brevity Term")
 
     embed = discord.Embed(
         title=term['term'],
