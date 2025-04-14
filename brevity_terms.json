@@ -1,0 +1,1378 @@
+[
+  {
+    "term": "Aborting/Abort/Aborted",
+    "definition": "Directive/informative call to cease action/attack/event/mission."
+  },
+  {
+    "term": "Action",
+    "definition": "Directive to initiate a briefed attack sequence or maneuver."
+  },
+  {
+    "term": "Active",
+    "definition": "An emitter is radiating."
+  },
+  {
+    "term": "Add (system/category)",
+    "definition": "Directive call to add a specific system or electronic order of battle (EOB) category to search responsibility."
+  },
+  {
+    "term": "Alarm",
+    "definition": "Directive/informative call indicating the termination of emission control (EMCON) procedures."
+  },
+  {
+    "term": "Alligator",
+    "definition": "Link-11/tactical digital information link (TADIL) A ."
+  },
+  {
+    "term": "Alpha check",
+    "definition": "Request for/confirmation of bearing and range to described point."
+  },
+  {
+    "term": "Angels",
+    "definition": "Height of a friendly aircraft (altitude) in thousands of feet (e.g., \"Angels Five\" is 5,000 ft)."
+  },
+  {
+    "term": "Anyface",
+    "definition": "Airborne Early Warning (AEW) aircraft."
+  },
+  {
+    "term": "Arizona",
+    "definition": "No anti-radiation missile (ARM) ordnance remaining."
+  },
+  {
+    "term": "As fragged",
+    "definition": "Unit or element will be performing exactly as stated by the air tasking order (ATO)."
+  },
+  {
+    "term": "Ashcan",
+    "definition": "ASW ( Anti-submarine warfare ) depth charge ."
+  },
+  {
+    "term": "Authenticate",
+    "definition": "To request or provide a response for a coded challenge."
+  },
+  {
+    "term": "Autocat",
+    "definition": "Any communications relay using automatic retransmissions."
+  },
+  {
+    "term": "Away",
+    "definition": "Friendly weapon release (e.g. \"Missile away\" or \"Pig Away\")"
+  },
+  {
+    "term": "Azimuth",
+    "definition": "Two or more groups primarily separated in bearing."
+  },
+  {
+    "term": "Ball",
+    "definition": "Aircraft carrier optical landing system ."
+  },
+  {
+    "term": "Bandit",
+    "definition": "An aircraft identified as enemy, in accordance with theater ID criteria. The term does not necessarily imply direction or authority to engage ."
+  },
+  {
+    "term": "Banzai",
+    "definition": "Information/directive to execute launch and decide tactics."
+  },
+  {
+    "term": "Base (number)",
+    "definition": "Reference number used to indicate such information as headings, altitude, and fuels."
+  },
+  {
+    "term": "Bassett",
+    "definition": "Rocket-thrown ASW torpedo."
+  },
+  {
+    "term": "Bead Window",
+    "definition": "Last transmission potentially disclosed unauthorized information."
+  },
+  {
+    "term": "Beam/beaming",
+    "definition": "Target stabilized within 70 to 110 degree aspect; generally (direction) given with cardinal directions: east, west, north, or south."
+  },
+  {
+    "term": "Bent",
+    "definition": "System indicated is inoperative."
+  },
+  {
+    "term": "Bingo",
+    "definition": ""
+  },
+  {
+    "term": "Bird",
+    "definition": "Friendly surface-to-air missile (SAM)."
+  },
+  {
+    "term": "Bird(s) affirm",
+    "definition": "Surface-to-air (S/A) informative call indicating unit is able and prepared to engage a specified target with SAMs (presumes target is within or will enter the SAM engagement envelope)."
+  },
+  {
+    "term": "Bird(s) away",
+    "definition": "Friendly SAM has been fired at designated target."
+  },
+  {
+    "term": "Bird(s) negat",
+    "definition": "S/A informative call indicating unit is unable to engage a specified target with SAMs. Opposite of bird(s) affirm."
+  },
+  {
+    "term": "Bittersweet",
+    "definition": "Notification of possible blue on blue (friendly fire) situation relative to a designated track or friendly aircraft."
+  },
+  {
+    "term": "Blank",
+    "definition": "A suppression of enemy air defenses (SEAD) aircraft does not detect any emitters of interest."
+  },
+  {
+    "term": "Blind",
+    "definition": "No visual contact with friendly aircraft/ground position; opposite of \" Visual \"."
+  },
+  {
+    "term": "Bloodhound",
+    "definition": "ASW Torpedo."
+  },
+  {
+    "term": "Bloomer",
+    "definition": "Disregard my last transmission."
+  },
+  {
+    "term": "Blow through",
+    "definition": "Directive/informative call that indicates aircraft will continue straight ahead at the merge and not turn with target/targets."
+  },
+  {
+    "term": "Blue on blue",
+    "definition": "Friendly fire , inadvertent hostile engagement between allies."
+  },
+  {
+    "term": "Bogey",
+    "definition": "A radar or visual air contact whose identity is unknown."
+  },
+  {
+    "term": "Bogey dope",
+    "definition": "Request for target information as briefed/available."
+  },
+  {
+    "term": "Box",
+    "definition": "Groups/contacts/formations in a square or offset square. FM 101-5-1 MCRP 5-2A"
+  },
+  {
+    "term": "BRAA",
+    "definition": "Tactical control format providing target bearing, range, altitude, and aspect , relative to a friendly aircraft or bullseye."
+  },
+  {
+    "term": "Bracket",
+    "definition": "Indicates geometry where friendly aircraft will maneuver to a position on opposing sides, either laterally or vertically from the target."
+  },
+  {
+    "term": "Break (direction)",
+    "definition": "Directive to perform an immediate maximum performance turn in the direction indicated; assumes a defensive situation."
+  },
+  {
+    "term": "Breakaway",
+    "definition": "Tanker or receiver directive call indicating immediate vertical and nose/tail separation between tanker and receiver is required."
+  },
+  {
+    "term": "Brevity",
+    "definition": "Radio frequency is becoming saturated, degraded, or jammed and briefer transmissions must follow."
+  },
+  {
+    "term": "Broadcast",
+    "definition": "Request/directive to switch to broadcast control."
+  },
+  {
+    "term": "Broke lock",
+    "definition": "Loss of radar/infrared (IR) lock-on (advisory)."
+  },
+  {
+    "term": "Bruiser",
+    "definition": "Friendly air-launched anti-ship missile (AShM) (for example, Harpoon , Exocet , or Penguin missiles)."
+  },
+  {
+    "term": "Buddy lock",
+    "definition": "Locked to a known friendly aircraft; normally a response to a spike or buddy spike call and accompanied with position/heading/altitude."
+  },
+  {
+    "term": "Buddy spike",
+    "definition": "Friendly aircraft air-to-air indication on radar warning receiver (RWR); to be followed by position, heading, and altitude."
+  },
+  {
+    "term": "Bugout",
+    "definition": "Separation from that particular engagement/attack/operation; no intent to (direction) re-engage/return."
+  },
+  {
+    "term": "Bulldog",
+    "definition": "Friendly surface/submarine-launched AShM (for example, Harpoon , Exocet , Otomat )."
+  },
+  {
+    "term": "Bullseye",
+    "definition": "An established point from which the position of an object can be referenced; made by cardinal/range or digital format."
+  },
+  {
+    "term": "Bump/Bump-up",
+    "definition": "Start temporary increase of flight altitude to set the aircraft to a favorable glide path to the target on the attack run."
+  },
+  {
+    "term": "Burn glint",
+    "definition": "Used to provide illumination."
+  },
+  {
+    "term": "Buster",
+    "definition": "Directive call to fly at maximum continuous speed."
+  },
+  {
+    "term": "Buzzer",
+    "definition": "Electronic communications jamming."
+  },
+  {
+    "term": "Candygram",
+    "definition": "Informative call to aircraft that electronic warfare (EW) targeting information is available on a briefed secure net."
+  },
+  {
+    "term": "Cap/capping",
+    "definition": ""
+  },
+  {
+    "term": "Captured",
+    "definition": "Aircrew has identified and is able to track a specified air-to-ground (A/G) target with an onboard sensor."
+  },
+  {
+    "term": "Cease",
+    "definition": "In air defense, break the engagement on the target specified. Missiles in flight engagement will continue to intercept."
+  },
+  {
+    "term": "Cease fire",
+    "definition": "Discontinue firing and/or Do not open fire; complete intercept if weapons are in flight; continue to track."
+  },
+  {
+    "term": "CERTSUB",
+    "definition": "Visual sighting of a submarine."
+  },
+  {
+    "term": "Champagne",
+    "definition": "An attack of three distinct groups with two in front and one behind."
+  },
+  {
+    "term": "Chattermark",
+    "definition": "Begin using briefed radio procedures to counter communications jamming."
+  },
+  {
+    "term": "Cheapshot",
+    "definition": ""
+  },
+  {
+    "term": "Check turn (deg)",
+    "definition": "degrees left or right and maintain new heading. (Left/right)"
+  },
+  {
+    "term": "Cherubs",
+    "definition": "Height of a friendly aircraft in hundreds of feet."
+  },
+  {
+    "term": "Chicks",
+    "definition": "Friendly aircraft."
+  },
+  {
+    "term": "Christmas tree",
+    "definition": "to turn on all exterior lighting."
+  },
+  {
+    "term": "Clean",
+    "definition": ""
+  },
+  {
+    "term": "Cleared",
+    "definition": "Requested action is authorized (no engaged/support roles are assumed)."
+  },
+  {
+    "term": "Cleared hot",
+    "definition": "Ordnance release is authorized."
+  },
+  {
+    "term": "Cloak",
+    "definition": "Directive/informative call to switch from normal external lighting to covert night vision device (NVD) only compatible lighting."
+  },
+  {
+    "term": "Closing",
+    "definition": "Decreasing in range."
+  },
+  {
+    "term": "Cobra",
+    "definition": "ASW torpedo in gyro angle snake search (GASS) mode (e.g. Mk46)."
+  },
+  {
+    "term": "Cold",
+    "definition": ""
+  },
+  {
+    "term": "Color (system)",
+    "definition": "Request for information on a given system at stated location; usually a request for (system/position) ambiguity resolution. May be used with improved data modem (IDM) data message− color , data ."
+  },
+  {
+    "term": "Comeoff",
+    "definition": "Directive to maneuver as indicated to either regain mutual support or to (left/right/deconflict flight paths for an exchange of engaged and supporting roles; low/dry) implies both visual and tally ."
+  },
+  {
+    "term": "Commit/committed",
+    "definition": "Fighter intent to engage/intercept; controller continues to provide information."
+  },
+  {
+    "term": "Confetti",
+    "definition": "Chaff lane or corridor."
+  },
+  {
+    "term": "Cons/conning",
+    "definition": "Threat / bogey aircraft leaving contrails ."
+  },
+  {
+    "term": "Contact",
+    "definition": ""
+  },
+  {
+    "term": "Continue",
+    "definition": "Continue present maneuver; does not imply clearance to engage or expend ordnance."
+  },
+  {
+    "term": "Continue dry",
+    "definition": "Ordnance release not authorized."
+  },
+  {
+    "term": "Cover/covering",
+    "definition": "Directive/informative call to take Surface/Air action or establish an air-to-air (A/A) posture that will allow engagement of a specified target or threat."
+  },
+  {
+    "term": "Cowboys",
+    "definition": "Ships of an ASW Search and Attack Unit (SAU)."
+  },
+  {
+    "term": "Crank",
+    "definition": "To maneuver beyond the range of a missile; implies illuminating target at radar gimbal limits in a beyond visual range engagement."
+  },
+  {
+    "term": "Cutoff",
+    "definition": "Request for, or directive to, intercept using cutoff geometry."
+  },
+  {
+    "term": "Cyclops",
+    "definition": "Any unmanned aerial vehicle ( UAV )."
+  },
+  {
+    "term": "Dash (#)",
+    "definition": "Aircraft position within a flight. Use if specific call sign is unknown."
+  },
+  {
+    "term": "Data",
+    "definition": "Standby for improved data modem (IDM) data message concerning (object) at stated location."
+  },
+  {
+    "term": "Datum",
+    "definition": "Last known position of a submarine contact after contact was lost."
+  },
+  {
+    "term": "Deadeye",
+    "definition": "Informative call by an airborne laser designator indicating the laser/IR system is inoperative."
+  },
+  {
+    "term": "Deadstick",
+    "definition": "No propulsive power due to loss of the engine/s. - see Deadstick landing"
+  },
+  {
+    "term": "Declare",
+    "definition": "Inquiry as to the identification of a specified track(s), target(s), or correlated group."
+  },
+  {
+    "term": "Defensive/defending",
+    "definition": "Aircraft is in a defensive position and maneuvering with reference to an active threat."
+  },
+  {
+    "term": "De-louse",
+    "definition": "Directive to detect and identify unknown aircraft trailing friendly aircraft."
+  },
+  {
+    "term": "Deploy",
+    "definition": "Directive to maneuver to briefed positioning."
+  },
+  {
+    "term": "Divert",
+    "definition": "Proceed to alternate mission or base."
+  },
+  {
+    "term": "Dogbox",
+    "definition": "Area within which units may interfere with or be endangered by ASW torpedoes"
+  },
+  {
+    "term": "Dolly",
+    "definition": "Tactical Digital Information Link C [Link-4A] (Link-4A/TADIL C). [ 1 ] This term was removed from U.S. usage in 2023. [ 2 ]"
+  },
+  {
+    "term": "Drag/dragging",
+    "definition": ""
+  },
+  {
+    "term": "Drop/dropping",
+    "definition": ""
+  },
+  {
+    "term": "Duck",
+    "definition": "Tactical air-launched decoy (TALD)."
+  },
+  {
+    "term": "Dustbin",
+    "definition": "Nuclear ASW depth charge ."
+  },
+  {
+    "term": "Echelon",
+    "definition": "Groups/contacts/formation with wingman displaced approximately 45 degrees behind leader's 3/9 (o'clock) line, see Echelon formation ."
+  },
+  {
+    "term": "Echo",
+    "definition": "Positive SEESAW/electronic warfare weapons system (EWWS)/System M/Mode X reply."
+  },
+  {
+    "term": "Engaged",
+    "definition": "Maneuvering with the intent to kill; this implies visual/radar acquisition of target."
+  },
+  {
+    "term": "Estimate",
+    "definition": "Provides estimate of the size, range, height, or other parameter of a specified contact; implies degradation."
+  },
+  {
+    "term": "Extend",
+    "definition": "Short-term maneuver to gain energy, distance, or separation; normally with the (direction) intent of re-engaging."
+  },
+  {
+    "term": "Eyeball ()",
+    "definition": ""
+  },
+  {
+    "term": "Faded",
+    "definition": "Radar contact is lost. (Termination of track plotting is not warranted.)"
+  },
+  {
+    "term": "Fast",
+    "definition": "Target speed is estimated to be at least 600 kn (1,100 km/h) ground speed or Mach 1."
+  },
+  {
+    "term": "Father",
+    "definition": "Tactical air navigation (TACAN) station."
+  },
+  {
+    "term": "Feather",
+    "definition": "visual sighting of a periscope wake."
+  },
+  {
+    "term": "Feeler",
+    "definition": "Fire control radar."
+  },
+  {
+    "term": "Feet wet/dry",
+    "definition": "Flying over water/land."
+  },
+  {
+    "term": "FENCE (in/out)",
+    "definition": "Set cockpit switches as appropriate prior to entering/exiting the combat area ( mnemonic for fire-control system / ECM / navigation / communication /Emitters)."
+  },
+  {
+    "term": "Fish",
+    "definition": "Inbound torpedo."
+  },
+  {
+    "term": "Flank/flanking",
+    "definition": ""
+  },
+  {
+    "term": "Flash (system)",
+    "definition": "Temporarily turn on pre-briefed identification, friend or foe (IFF) mode or system."
+  },
+  {
+    "term": "Float",
+    "definition": "Directive/informative call to expand the formation laterally within visual limits to maintain a radar contact or prepare for a defensive response."
+  },
+  {
+    "term": "Fox (number)",
+    "definition": "Simulated/actual launch of air-to-air weapons. ONE - semiactive radar-guided missile, such as an AIM-7 Sparrow or Skyflash . TWO - infrared-guided missile, such as an AIM-9 Sidewinder or AIM-132 ASRAAM . THREE - active radar-guided missile, such as an AIM-120 AMRAAM or AIM-54 Phoenix ."
+  },
+  {
+    "term": "Fox mike",
+    "definition": "Very high frequency (VHF)/frequency modulated (FM) radio."
+  },
+  {
+    "term": "Friendly",
+    "definition": "A positively identified friendly contact."
+  },
+  {
+    "term": "Furball",
+    "definition": "A turning fight involving multiple aircraft with known bandits and friendlies mixed."
+  },
+  {
+    "term": "Flat",
+    "definition": "Even yourself out or calibrate yourself"
+  },
+  {
+    "term": "Gadget",
+    "definition": "Radar or emitter equipment."
+  },
+  {
+    "term": "Gate",
+    "definition": "Directive/informative call to fly as quickly as possible, using afterburner/maximum power."
+  },
+  {
+    "term": "Gimbal",
+    "definition": "Radar target is approaching azimuth or elevation limits. (Direction)"
+  },
+  {
+    "term": "Gingerbread",
+    "definition": "Directive to establish/maintain tighter brevity over voice communications."
+  },
+  {
+    "term": "Glowworm",
+    "definition": "Flare-dropping aircraft"
+  },
+  {
+    "term": "Go active",
+    "definition": "Go to the briefed HAVE QUICK net (UHF radio frequency hopping mode)"
+  },
+  {
+    "term": "Goblin",
+    "definition": "Enemy diesel electric powered submarine."
+  },
+  {
+    "term": "Go clear",
+    "definition": "Use unencrypted voice communications."
+  },
+  {
+    "term": "Goggle/degoggle",
+    "definition": "Directive/informative call to put on/take off night vision devices."
+  },
+  {
+    "term": "Gorilla",
+    "definition": "Large force of indeterminate numbers and formation."
+  },
+  {
+    "term": "Go secure",
+    "definition": "Use encrypted voice communications."
+  },
+  {
+    "term": "Grandslam",
+    "definition": "All hostile aircraft of a designated track (or against which a mission was tasked) are shot down."
+  },
+  {
+    "term": "Green (direction)",
+    "definition": "Direction determined to be clearest of enemy air-to-air activity."
+  },
+  {
+    "term": "Greyhound",
+    "definition": "Friendly ground attack cruise missile (for example, Tomahawk land attack missile (TLAM) and conventional air-launched cruise missile (CALCM))."
+  },
+  {
+    "term": "Group",
+    "definition": "Radar targets within approximately 3 nautical miles (3.5 mi; 5.6 km) of each other."
+  },
+  {
+    "term": "Guns",
+    "definition": "An air-to-air or air-to-surface gunshot."
+  },
+  {
+    "term": "Hard (direction)",
+    "definition": "High-G, energy-sustaining turn."
+  },
+  {
+    "term": "Heads up",
+    "definition": "Alert of an activity of interest."
+  },
+  {
+    "term": "Heavy",
+    "definition": "A group or package known to contain three or more entities."
+  },
+  {
+    "term": "High",
+    "definition": "Between 25,000 and 40,000 ft (7,600 and 12,200 m) above mean sea level (MSL)."
+  },
+  {
+    "term": "Hold down",
+    "definition": "Directive to key transmitter for direction-finding (DF) steer."
+  },
+  {
+    "term": "Holding hands",
+    "definition": "Aircraft in visual formation."
+  },
+  {
+    "term": "Hold fire",
+    "definition": "An emergency fire control order used to stop firing on a designated target, to include destruction of any missiles in flight."
+  },
+  {
+    "term": "Home plate",
+    "definition": "Home airfield or carrier."
+  },
+  {
+    "term": "Hook (left/right)",
+    "definition": "Directive to perform an in-place 180-degree turn."
+  },
+  {
+    "term": "Hostile",
+    "definition": "A contact identified as enemy upon which clearance to fire is authorized in accordance with theater rules of engagement."
+  },
+  {
+    "term": "Hotdog",
+    "definition": "Informative/directive call that an aircraft is approaching or at a specified standoff distance from the sovereign airspace of a nation (as defined by national boundaries or territorial sea and airspace). ( Color may indicate additional standoff distance.) Follow briefed procedures."
+  },
+  {
+    "term": "Hotshot",
+    "definition": "Informative call that an aircraft is deploying flares for either system testing or visual acquisition purposes"
+  },
+  {
+    "term": "Hotel fox",
+    "definition": "High frequency (HF) radio."
+  },
+  {
+    "term": "House party",
+    "definition": "Informative/directive call that a civilian building is booby trapped or rigged with an IED , and needs to be evacuated."
+  },
+  {
+    "term": "Husky",
+    "definition": "(Naval) Air intercept missile (AIM)-120 supported to HPRF active range; same meaning as USAF cheapshot ."
+  },
+  {
+    "term": "In (direction)",
+    "definition": "Informative call indicating a turn to a hot aspect relative to a threat / target ."
+  },
+  {
+    "term": "India",
+    "definition": "Mode IV."
+  },
+  {
+    "term": "Indians",
+    "definition": "Ships of an ASUW Surface Attack Group (SAG)."
+  },
+  {
+    "term": "Interrogate",
+    "definition": "Interrogate the designated contact of the IFF mode indicated."
+  },
+  {
+    "term": "Jackal",
+    "definition": "Surveillance network participating group 7 (NPG 7) of Link 16 TADIL (tactical information link). [ 3 ]"
+  },
+  {
+    "term": "Joker",
+    "definition": "Fuel state above BINGO at which separation/bugout/event termination should begin."
+  },
+  {
+    "term": "Judy",
+    "definition": "Aircrew has radar/visual contact on the correct target, has taken control of the intercept, and only requires situation awareness information. Controller will minimize radio transmissions."
+  },
+  {
+    "term": "KIA",
+    "definition": "Killed in action."
+  },
+  {
+    "term": "Knock it off",
+    "definition": "Directive to cease air combat maneuvers/attacks/activities."
+  },
+  {
+    "term": "Kraken",
+    "definition": "Release of long-range anti-ship missile (LRASM) [ 4 ]"
+  },
+  {
+    "term": "Ladder",
+    "definition": "Three or more groups/contacts in range."
+  },
+  {
+    "term": "Laser on",
+    "definition": "Directive to start laser designation."
+  },
+  {
+    "term": "Lead-trail",
+    "definition": "Tactical formation of two contacts within a group separated in range or following one another."
+  },
+  {
+    "term": "Leaker(s)",
+    "definition": "Airborne threat has passed through a defensive layer. Call should include amplifying information."
+  },
+  {
+    "term": "Line abreast",
+    "definition": "Two contacts within a group side by side."
+  },
+  {
+    "term": "Lights on/off",
+    "definition": "Directive to turn on/off exterior lights."
+  },
+  {
+    "term": "Locked",
+    "definition": "Final radar lock-on; sort is not assumed. ( BRAA /direction)"
+  },
+  {
+    "term": "Lost contact",
+    "definition": "Radar contact lost. ( drop track is recommended.)"
+  },
+  {
+    "term": "Lost lock",
+    "definition": "Loss of radar/IR lock-on (advisory)."
+  },
+  {
+    "term": "Low",
+    "definition": "Target altitude below 10,000 ft (3,000 m) above ground level (AGL)."
+  },
+  {
+    "term": "Maddog",
+    "definition": "Launch of friendly active radar homing air-to-air missile , such as the AIM-120 , without radar guidance from the launch aircraft. The missile will rely on its own radar to find a target and will generally track the first target it sees."
+  },
+  {
+    "term": "Magnum",
+    "definition": "Launch of friendly anti-radiation missile (such as AGM-88 HARM , ALARM )."
+  },
+  {
+    "term": "Mapping",
+    "definition": "Multifunction radar in an Air/Ground mode."
+  },
+  {
+    "term": "Marking",
+    "definition": "Friendly aircraft leaving contrails ."
+  },
+  {
+    "term": "Marmon",
+    "definition": "5\" (127 mm) gun."
+  },
+  {
+    "term": "Marshal/Marshalling",
+    "definition": "Establish/established at a specific point."
+  },
+  {
+    "term": "Medium",
+    "definition": "Target altitude between 10,000 feet (3,000 m) Above Ground Level (AGL) and 25,000 feet (7,600 m) above Mean Sea Level (MSL)."
+  },
+  {
+    "term": "Mickey",
+    "definition": "HAVE QUICK radio time-of-day (TOD) signal"
+  },
+  {
+    "term": "Midnight",
+    "definition": "Informative call advising that command and control (C2) functions are no longer available; opposite of \" Sunrise \"."
+  },
+  {
+    "term": "Monitor",
+    "definition": "Maintain radar awareness on or assume responsibility for specified group."
+  },
+  {
+    "term": "Mother",
+    "definition": "Parent ship."
+  },
+  {
+    "term": "Mud",
+    "definition": "Radar warning receiver (RWR) indication of ground threat. Add clock position /azimuth and radar type, if known."
+  },
+  {
+    "term": "Music",
+    "definition": "Electronic radar jamming and deception ."
+  },
+  {
+    "term": "Nails",
+    "definition": "Radar warning receiver (RWR) indication of an AI radar in search mode. Add clock position/azimuth and radar type, if known."
+  },
+  {
+    "term": "Naked",
+    "definition": "No radar warning receiver (RWR) indications."
+  },
+  {
+    "term": "New picture",
+    "definition": "Used by controller or aircrew when tactical picture has changed. Supersedes all previous calls."
+  },
+  {
+    "term": "No factor",
+    "definition": "Not a threat."
+  },
+  {
+    "term": "No joy",
+    "definition": "Aircrew does not have visual contact with the target, bandit or landmark; opposite of Tally ."
+  },
+  {
+    "term": "Notch",
+    "definition": "All-aspect missile defensive maneuver to place threat radar/missile on the beam (directly perpendicular). Modern pulse-doppler radars remove ground clutter by filtering out returns from stationary objects; putting the threat on the beam permits the defending aircraft to be confused with ground returns and hence disappear from the threat radar. As missiles guide by creating a direct intercept course, this is also used to reduce the missile's speed and thus its ability to maneuver if radar lock is maintained. Can also be used in the context of submarine warfare as a maneuverer to leave the sonar detection cone of an incoming torpedo before it closes the distance required to detect and lock onto the notching vessel."
+  },
+  {
+    "term": "Off (direction)",
+    "definition": "Informative call indicating attack is terminated and maneuvering to the indicated direction."
+  },
+  {
+    "term": "Offset",
+    "definition": "Informative call indicating maneuver in a specified direction with reference to (direction) the target."
+  },
+  {
+    "term": "On station",
+    "definition": "Informative call unit/aircraft has reached assigned station."
+  },
+  {
+    "term": "Opening",
+    "definition": "Increasing in range."
+  },
+  {
+    "term": "Oranges",
+    "definition": "Weather."
+  },
+  {
+    "term": "Out (direction)",
+    "definition": "Informative call indicating a turn to a cold aspect relative to the threat; opposite of in ."
+  },
+  {
+    "term": "Outlaw",
+    "definition": "Informative call that a bogey has met point of origin criteria."
+  },
+  {
+    "term": "Package",
+    "definition": "Geographically isolated collection of groups/contacts/formations."
+  },
+  {
+    "term": "Padlocked",
+    "definition": "Informative call indicating aircrew cannot take eyes off an aircraft or a surface position without risk of losing tally / visual ."
+  },
+  {
+    "term": "Paint(s)",
+    "definition": "Interrogated group/radar contact that is responding with any of the specified IFF modes and correct codes established for the id criteria."
+  },
+  {
+    "term": "Panther",
+    "definition": "Enemy nuclear powered attack submarine."
+  },
+  {
+    "term": "Parrot",
+    "definition": "IFF transponder."
+  },
+  {
+    "term": "Paveway",
+    "definition": "Release of laser-guided bomb or bombs"
+  },
+  {
+    "term": "Picture",
+    "definition": "The provided aerial tactical situation status pertinent to mission. Generally by an AWACS ."
+  },
+  {
+    "term": "Pig",
+    "definition": "Friendly glide weapon (e.g. AGM-154 JSOW ). Wordplay on JSOW (pronounced \"J-SOW\"; a sow is a female pig)."
+  },
+  {
+    "term": "Pigeons",
+    "definition": "Magnetic bearing and range to homeplate (or specified destination). (Location)"
+  },
+  {
+    "term": "Pince/pincer",
+    "definition": "Threat maneuvering for a bracket attack."
+  },
+  {
+    "term": "Pitbull",
+    "definition": "Informative call that an active radar-guided missile (such as AIM-120, AIM-54, Meteor) is at active range and no longer requires radar input from launch aircraft."
+  },
+  {
+    "term": "Playmate",
+    "definition": "Cooperating aircraft."
+  },
+  {
+    "term": "Playtime",
+    "definition": "Amount of time aircraft can remain on station."
+  },
+  {
+    "term": "(freq) Pogo (freq)",
+    "definition": "Switch to communication channel number preceding POGO. If unable to establish communications, switch to channel number following POGO. If no channel number follows POGO, return to this channel."
+  },
+  {
+    "term": "Pop",
+    "definition": "Starting climb for air-to-surface attack."
+  },
+  {
+    "term": "Popeye",
+    "definition": "Flying in clouds or area of reduced visibility."
+  },
+  {
+    "term": "Popup",
+    "definition": "1. Informative call of a contact that has suddenly appeared inside of meld/CCR/briefed range. 2. Criteria used as a self-defense method, within the ROE, to protect friendly air defense elements from hostile aircraft."
+  },
+  {
+    "term": "Posit",
+    "definition": "Request for position; response in terms of a geographic landmark, or off a common reference point."
+  },
+  {
+    "term": "Post attack",
+    "definition": "Directive transmission to indicate desired direction after completion of (Direction) intercept/engagement."
+  },
+  {
+    "term": "Post hole",
+    "definition": "Rapid descending spiral."
+  },
+  {
+    "term": "Press",
+    "definition": "Directive to continue the attack; mutual support will be maintained. Supportive role will be assumed."
+  },
+  {
+    "term": "Print (type)",
+    "definition": "Unambiguous Non-Cooperative Target Recognition (NCTR) reply."
+  },
+  {
+    "term": "Privateer",
+    "definition": "Enemy patrol boat."
+  },
+  {
+    "term": "PROBSUB",
+    "definition": "Contact with strong cumulative evidence of being a submarine."
+  },
+  {
+    "term": "Pull chocks",
+    "definition": "Depart. Get ready to depart. (Refers to pulling concrete blocks from aircraft wheels to allow take-off)"
+  },
+  {
+    "term": "Pump",
+    "definition": "A briefed maneuver to low aspect (where aspect refers to target position—regardless of distance—relative to the friendly aircraft's nose; \"high aspect\" would be on an azimuth in front of the friendly, while \"low aspect\" would indicate position along an azimuth behind the friendly) to stop closure on the threat or geographical boundary, with the intent to re-engage."
+  },
+  {
+    "term": "Pure",
+    "definition": "Informative call indicating pure pursuit is being used or directive to go pure pursuit."
+  },
+  {
+    "term": "Push (channel)",
+    "definition": "Go to designated frequency. No acknowledgment required."
+  },
+  {
+    "term": "Pushing",
+    "definition": "Departing designated point."
+  },
+  {
+    "term": "Pushing",
+    "definition": "Informative call that said group(s) have turned cold and will continue to be (group description) monitored."
+  },
+  {
+    "term": "Range",
+    "definition": "Two or more groups separated primarily in distance along the same bearing."
+  },
+  {
+    "term": "Raygun",
+    "definition": "Indicates a radar lock-on to unknown aircraft; a request for a buddy spike (position/heading/altitude) reply from friendly aircraft meeting these parameters (to prevent friendly fire )."
+  },
+  {
+    "term": "Reference",
+    "definition": "Directive to assume stated heading. (Direction)"
+  },
+  {
+    "term": "Repeat",
+    "definition": "Used in surface-surface operations to fire again using the same method of fire (during adjustment) or to fire the same number of rounds using the same method of fire (during fire for effect). This is not used to request that the last message be retransmitted (for this, use say again )."
+  },
+  {
+    "term": "Reported",
+    "definition": "Identification of an object or a contact by an intelligence system. (Type)"
+  },
+  {
+    "term": "Request tasking",
+    "definition": "requesting an objective (or heading) from ground control or from AWACS towards an area of operation."
+  },
+  {
+    "term": "Reset",
+    "definition": "Proceed to a pre-briefed position or area of operation."
+  },
+  {
+    "term": "Resume",
+    "definition": "Resume last formation/station/mission ordered."
+  },
+  {
+    "term": "Retrograde",
+    "definition": "Directive to withdraw from present position or area of operation in response to a threat."
+  },
+  {
+    "term": "Rider",
+    "definition": "A bogey that is conforming with safe passage routing/airspeed/altitude procedures."
+  },
+  {
+    "term": "Rifle",
+    "definition": "Friendly air-to-ground missile launch."
+  },
+  {
+    "term": "Ringer",
+    "definition": "ASW Mortar."
+  },
+  {
+    "term": "Ripple",
+    "definition": "Two or more munitions released or fired in close succession."
+  },
+  {
+    "term": "Riser",
+    "definition": "Suddenly appearing radar contact."
+  },
+  {
+    "term": "River City",
+    "definition": "Implement immediate communications blackout until further notice."
+  },
+  {
+    "term": "Roger",
+    "definition": "Radio transmission received; does not indicate compliance or reaction."
+  },
+  {
+    "term": "Rolex (±time)",
+    "definition": "Time-line adjustment in minutes from planned mission execution time. (Positive is later)."
+  },
+  {
+    "term": "Roman Candle",
+    "definition": "Nuclear tipped surface to air missile."
+  },
+  {
+    "term": "Rope",
+    "definition": "Illumination of an aircraft with an IR pointer."
+  },
+  {
+    "term": "Saddled",
+    "definition": "Informative call from wingman/element indicating the return to briefed formation position."
+  },
+  {
+    "term": "SAM (direction)",
+    "definition": "Visual acquisition of a SAM (surface-air missile) or SAM launch; should include position."
+  },
+  {
+    "term": "Sandwiched",
+    "definition": "A situation where an aircraft/element is positioned between opposing aircraft/elements."
+  },
+  {
+    "term": "Saunter",
+    "definition": "Fly at best endurance."
+  },
+  {
+    "term": "Scram",
+    "definition": "Emergency directive to egress for defensive or survival reasons. (Direction)"
+  },
+  {
+    "term": "Scramble",
+    "definition": "Takeoff as quickly as possible."
+  },
+  {
+    "term": "Scud",
+    "definition": "Any tactical ballistic missile (TBM). Previously used to refer to the soviet tactical ballistic missile. ( see Scud )"
+  },
+  {
+    "term": "Separate",
+    "definition": "Leave a specific engagement; may or may not re-enter."
+  },
+  {
+    "term": "Shackle",
+    "definition": "One weave , a single crossing of flight paths; maneuver to adjust/regain formation parameters."
+  },
+  {
+    "term": "Shadow",
+    "definition": "Follow indicated target."
+  },
+  {
+    "term": "Shift",
+    "definition": "Directive to shift laser illumination."
+  },
+  {
+    "term": "Shooter",
+    "definition": "Aircraft/unit designated to employ ordnance."
+  },
+  {
+    "term": "Shotgun",
+    "definition": "Pre-briefed weapons state at which separation / bugout should begin."
+  },
+  {
+    "term": "Skate",
+    "definition": "Informative call/directive to execute launch and leave tactics."
+  },
+  {
+    "term": "Skip it",
+    "definition": "Veto of fighter commit , usually followed with further directions."
+  },
+  {
+    "term": "Skosh",
+    "definition": "Aircraft is out of or unable to employ active radar missiles."
+  },
+  {
+    "term": "Skunk",
+    "definition": "A radar or visual maritime surface contact whose identity is unknown."
+  },
+  {
+    "term": "Slapshot",
+    "definition": "Directive for an aircraft to employ a range-unknown high-speed anti-radiation (type/bearing) missile (HARM) against a specified threat at the specified bearing."
+  },
+  {
+    "term": "Slide",
+    "definition": "Directive call to high-value airborne asset (HVAA) to continue present mission while extending range from target in response to perceived threat."
+  },
+  {
+    "term": "Slow",
+    "definition": "Target with a ground speed of 300 kn (560 km/h) or less."
+  },
+  {
+    "term": "Smash",
+    "definition": "Directive to turn on/off anti-collision lights."
+  },
+  {
+    "term": "Smoke",
+    "definition": "Smoke marker used to mark a position."
+  },
+  {
+    "term": "Snake",
+    "definition": "Directive to oscillate an IR pointer about a target."
+  },
+  {
+    "term": "Snap (direction)",
+    "definition": "An immediate vector to the group described."
+  },
+  {
+    "term": "Sniper",
+    "definition": "Directive for an aircraft to employ a range-known HARM against a specified threat at the specified location."
+  },
+  {
+    "term": "Snooze",
+    "definition": "Directive/informative call indicating initiation of EMCON procedures."
+  },
+  {
+    "term": "Sort/sorted",
+    "definition": ""
+  },
+  {
+    "term": "Spades",
+    "definition": "An integrated group/radar contact which lacks the ATO (or equivalent) IFF modes and codes required for the ID criteria."
+  },
+  {
+    "term": "Sparkle",
+    "definition": "Target marking by IR pointer; target marking by gunship or forward air controller (airborne) (FAC-A) using incendiary rounds."
+  },
+  {
+    "term": "Spike",
+    "definition": "Radar warning receiver (RWR) indication of an AI radar in track, launch, or unknown mode. Add clock position/azimuth and radar type, if known."
+  },
+  {
+    "term": "Spin",
+    "definition": "Directive/informative call to execute a pre-briefed timing/spacing maneuver."
+  },
+  {
+    "term": "Spitter",
+    "definition": "An aircraft that has departed from the engagement or is departing the engaged (direction) fighters' targeting responsibility."
+  },
+  {
+    "term": "Splash",
+    "definition": "A/A Target destroyed, or A/S weapons impact."
+  },
+  {
+    "term": "Split",
+    "definition": "An informative call that a flight member is leaving formation to engage a threat; visual may not be maintained."
+  },
+  {
+    "term": "Spoofing",
+    "definition": "Informative call that voice deception is being employed."
+  },
+  {
+    "term": "Spot",
+    "definition": "Acquisition of laser designation."
+  },
+  {
+    "term": "Squawk (number/code)",
+    "definition": "Operate IFF as indicated or IFF is operating as indicated."
+  },
+  {
+    "term": "Squawk flash",
+    "definition": "Use the flash feature on the IFF which cause the transponder signal to highlight on radar display. Hence the term means to announce your location."
+  },
+  {
+    "term": "Squawking",
+    "definition": "An informative call denoting a bogey is responding with an IFF mode (#)."
+  },
+  {
+    "term": "Stack",
+    "definition": "Two or more groups/contacts/formations with a high/low altitude separation in relation to each other."
+  },
+  {
+    "term": "Status",
+    "definition": "Request for tactical situation."
+  },
+  {
+    "term": "Steady",
+    "definition": "Directive to stop oscillation (wavering) of IR pointer."
+  },
+  {
+    "term": "Steer",
+    "definition": "Set magnetic compass heading indicated."
+  },
+  {
+    "term": "Stern",
+    "definition": "Request for, or directive to, intercept using stern geometry."
+  },
+  {
+    "term": "Stinger",
+    "definition": "Within a group, a formation of three or more aircraft with a single aircraft in trail."
+  },
+  {
+    "term": "Stop",
+    "definition": "Stop IR illumination of a target."
+  },
+  {
+    "term": "Stranger",
+    "definition": "Unidentified traffic that is not associated with the action in progress."
+  },
+  {
+    "term": "Strangle ()",
+    "definition": "Turn off equipment indicated."
+  },
+  {
+    "term": "Strip",
+    "definition": "Individual fighter/section is leaving the formation to pursue separate attacks."
+  },
+  {
+    "term": "Stripped",
+    "definition": "Informative call from wingman/element indicating out of briefed formation/position."
+  },
+  {
+    "term": "Strobe",
+    "definition": "Radar indications of noise jamming."
+  },
+  {
+    "term": "Sunshine",
+    "definition": "Directive or informative call indicating illumination of target is being conducted with artificial illumination."
+  },
+  {
+    "term": "Sunrise",
+    "definition": "Informative call that C2 functions (Command & Control) are available. (opposite of midnight )."
+  },
+  {
+    "term": "Switch/switched",
+    "definition": "Indicates an attacker is changing from one aircraft to another."
+  },
+  {
+    "term": "Tactical",
+    "definition": "Request/directive to switch to tactical control."
+  },
+  {
+    "term": "Tag",
+    "definition": "(system Known identification of a specific (system) at the stated location; may be used w/position) with IDM [ clarification needed ] data message, (for example, tag data )."
+  },
+  {
+    "term": "Tally",
+    "definition": "Sighting of a target , bandit , bogey , or enemy position; opposite of no joy ."
+  },
+  {
+    "term": "Target ()",
+    "definition": "Directive to assign group responsibility to aircraft in a flight."
+  },
+  {
+    "term": "Targeted ()",
+    "definition": "Group responsibility has been met."
+  },
+  {
+    "term": "Ten seconds",
+    "definition": "Directive to terminal controller to stand by for laser on call in approximately 10 seconds."
+  },
+  {
+    "term": "Threat",
+    "definition": "Untargeted hostile / bandit / bogey within pre-briefed range/aspect of a (direction) friendly."
+  },
+  {
+    "term": "Throttles",
+    "definition": "Reduction in power to decrease IR signature."
+  },
+  {
+    "term": "Tied",
+    "definition": "Positive radar contact with element/aircraft."
+  },
+  {
+    "term": "Tiger",
+    "definition": "Enough fuel and ordnance to accept a commit ."
+  },
+  {
+    "term": "Timber",
+    "definition": "Air control network participating group (NPG) of tactical digital information links ( Link 16 /TADIL J)."
+  },
+  {
+    "term": "Track",
+    "definition": "Any detected point of contact visible on a radar or sonar display console, each identified by a unique number."
+  },
+  {
+    "term": "Trailer",
+    "definition": "The last aircraft within a group(s)."
+  },
+  {
+    "term": "Trashed",
+    "definition": "Informative call that missile has been defeated."
+  },
+  {
+    "term": "Trespass",
+    "definition": "The addressed flight is entering a surface/air threat ring of a specific system at the stated (position) location."
+  },
+  {
+    "term": "Tucker",
+    "definition": "76mm gun."
+  },
+  {
+    "term": "Tumbleweed",
+    "definition": "Indicates limited situational awareness; no joy , blind ; a request for information."
+  },
+  {
+    "term": "Turret",
+    "definition": "indicates launch of an air-to-surface missile."
+  },
+  {
+    "term": "Unable",
+    "definition": "Cannot comply as requested/directed."
+  },
+  {
+    "term": "Uniform",
+    "definition": "Ultra-high frequency (UHF) radio."
+  },
+  {
+    "term": "Vampire",
+    "definition": "Hostile anti-ship missile (ASM)."
+  },
+  {
+    "term": "Vanished",
+    "definition": "Special case of faded wherein contact is not in a known sensor blind zone and is correlated to a shot by friendly forces."
+  },
+  {
+    "term": "Very high",
+    "definition": "Above 40,000 ft (12,000 m) MSL."
+  },
+  {
+    "term": "Vic",
+    "definition": "Three groups, contacts, or formations with the single closest in range and two contacts, azimuth split, in trail."
+  },
+  {
+    "term": "Victor",
+    "definition": "VHF/amplitude modulation (AM) radio."
+  },
+  {
+    "term": "Visual",
+    "definition": "Sighting of a friendly aircraft/ground position; opposite of blind ."
+  },
+  {
+    "term": "Wall",
+    "definition": "Three or more groups or contacts primarily split in azimuth."
+  },
+  {
+    "term": "Warning (color)",
+    "definition": "Hostile attack is RED imminent or in progress. YELLOW probable. WHITE improbable (all clear)."
+  },
+  {
+    "term": "Weapons (followed by appropriate modifier below)",
+    "definition": "Fire only; FREE at targets not identified as friendly in accordance with current rules of engagement (ROE). TIGHT at targets positively identified as hostile in accordance with current ROE. HOLD * (USA, USMC) in self-defense or in response to a formal order. SAFE (USN)   NOTE: USN and NATO use weapons safe to avoid confusion with the phrase hold fire ."
+  },
+  {
+    "term": "Weeds",
+    "definition": "Indicates that fixed-wing aircraft are operating below 2,000 ft (610 m) above ground level."
+  },
+  {
+    "term": "What luck",
+    "definition": "Request for results of missions or tasks."
+  },
+  {
+    "term": "What state",
+    "definition": "Report amount of fuel and missiles remaining. Ammunition and oxygen are reported only when specifically requested or critical. Active = number of active radar missiles remaining. Radar = number of semi-active radar missiles remaining. Heat = number of IR missiles remaining. Fuel = pounds of fuel or time remaining."
+  },
+  {
+    "term": "Wilco",
+    "definition": "Will comply"
+  },
+  {
+    "term": "Winchester",
+    "definition": "No ordnance remaining, can be used to refer to specific types ordnance or all ordnance."
+  },
+  {
+    "term": "Woodpecker",
+    "definition": "Close in weapons system (CIWS)."
+  },
+  {
+    "term": "Words",
+    "definition": "Directive or interrogative regarding further information or directives pertinent to mission."
+  },
+  {
+    "term": "Yardstick",
+    "definition": "Directive to use air-to-air tactical air navigation (A/A TACAN ) for ranging."
+  }
+]
