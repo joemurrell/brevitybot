@@ -5,7 +5,7 @@ import os
 import random
 import requests
 import asyncio
-import htmlC:\Users\joemu\OneDrive\Documents\Coding\brevitybot\brevity-bot.py
+import html
 from bs4 import BeautifulSoup
 import re
 from dotenv import load_dotenv
