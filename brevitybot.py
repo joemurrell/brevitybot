@@ -19,9 +19,9 @@ load_dotenv()
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 FLICKR_API_KEY = os.getenv("FLICKR_API_KEY")
-CONFIG_FILE = "config.json"
 CONFIG_FILE = "/data/config.json"
 USED_TERMS_FILE = "/data/used_terms.json"
+TERMS_FILE = "brevity_terms.json"
 
 bot = commands.Bot(command_prefix="!bb", intents=discord.Intents.all())
 
