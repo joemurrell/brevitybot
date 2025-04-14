@@ -23,7 +23,7 @@ CONFIG_FILE = "config.json"
 USED_TERMS_FILE = "used_terms.json"
 TERMS_FILE = "brevity_terms.json"
 
-bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
+bot = commands.Bot(command_prefix="!bb", intents=discord.Intents.all())
 
 # -------------------------------
 # UTILITIES
@@ -173,6 +173,37 @@ async def setup(ctx):
     save_config(channel_id)
     await ctx.send(f"Setup complete! I’ll post daily here in <#{channel_id}>.")
 
+@bot.command()
+async def newterm(ctx):
+    # Manually send a new brevity term to the channel
+    term = get_next_brevity_term()
+    if not term:
+        await ctx.send("No terms available. Please check the brevity terms file.")
+        return
+
+    image_url = get_random_flickr_jet(FLICKR_API_KEY)
+
+    # Link to appropriate letter section of the wiki page
+    letter = term['term'][0].upper()
+    wiki_url = f"https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code#{letter}"
+
+    await ctx.send("Brevity Term")
+
+    embed = discord.Embed(
+        title=term['term'],
+        url=wiki_url,
+        description=term['definition'],
+        color=discord.Color.blue()
+    )
+
+    if image_url:
+        embed.set_image(url=image_url)
+
+    embed.set_footer(text="From Wikipedia – Multiservice Tactical Brevity Code")
+
+    await ctx.send(embed=embed)
+    print(f"Manually sent: {term['term']}")
+
 # -------------------------------
 # GET NEXT TERM
 # -------------------------------
@@ -208,7 +239,7 @@ async def post_brevity_term():
     # Post a new brevity term and random image to the configured channel
     config = load_config()
     if not config or "channel_id" not in config:
-        print("❌ No channel configured. Use !setup in a channel.")
+        print("❌ No channel configured. Use !bbsetup in a channel.")
         return
 
     channel = bot.get_channel(config["channel_id"])
