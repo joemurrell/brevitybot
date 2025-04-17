@@ -7,10 +7,16 @@ import requests
 import html
 from bs4 import BeautifulSoup
 import re
+import logging
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Configure logging: suppress external libs but keep INFO logs for own app
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("discord").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 # -------------------------------
 # CONFIGURATION
