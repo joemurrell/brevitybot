@@ -1,5 +1,6 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import tasks
+from discord import app_commands
 import json
 import os
 import random
@@ -28,7 +29,10 @@ CONFIG_FILE = "config.json"
 USED_TERMS_FILE = "used_terms.json"
 TERMS_FILE = "brevity_terms.json"
 
-bot = commands.Bot(command_prefix="!bb", intents=discord.Intents.all())
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
+tree = app_commands.CommandTree(client)
 
 # -------------------------------
 # UTILITIES
@@ -162,20 +166,31 @@ def get_next_brevity_term(guild_id):
     save_used_term(guild_id, chosen["term"])
     return chosen
 
+def get_brevity_term_by_name(term_name):
+    try:
+        with open(TERMS_FILE, "r", encoding="utf-8") as f:
+            all_terms = json.load(f)
+        for entry in all_terms:
+            if entry["term"].lower() == term_name.lower():
+                return entry
+    except FileNotFoundError:
+        print("❌ brevity_terms.json not found.")
+    return None
+
 # -------------------------------
-# DISCORD COMMANDS
+# SLASH COMMANDS
 # -------------------------------
 
-@bot.command()
-async def setup(ctx):
-    save_config(ctx.guild.id, ctx.channel.id)
-    await ctx.send(f"Setup complete! I’ll post daily here in <#{ctx.channel.id}>.")
+@tree.command(name="setup", description="Set the current channel for daily brevity posts.")
+async def setup(interaction: discord.Interaction):
+    save_config(interaction.guild.id, interaction.channel.id)
+    await interaction.response.send_message(f"Setup complete! I’ll post daily here in <#{interaction.channel.id}>.", ephemeral=True)
 
-@bot.command()
-async def newterm(ctx):
-    term = get_next_brevity_term(ctx.guild.id)
+@tree.command(name="newterm", description="Send a new brevity term immediately.")
+async def newterm(interaction: discord.Interaction):
+    term = get_next_brevity_term(interaction.guild.id)
     if not term:
-        await ctx.send("No terms available. Please check the brevity terms file.")
+        await interaction.response.send_message("No terms available. Please check the brevity terms file.", ephemeral=True)
         return
     image_url = get_random_flickr_jet(FLICKR_API_KEY)
     letter = term['term'][0].upper()
@@ -189,8 +204,26 @@ async def newterm(ctx):
     if image_url:
         embed.set_image(url=image_url)
     embed.set_footer(text="From Wikipedia – Multiservice Tactical Brevity Code")
-    await ctx.send(embed=embed)
-    print(f"Manually sent to {ctx.guild.name}: {term['term']}")
+    await interaction.response.send_message(embed=embed)
+    print(f"Manually sent to {interaction.guild.name}: {term['term']}")
+
+@tree.command(name="define", description="Look up the definition of a brevity term (without tracking it).")
+@app_commands.describe(term="The brevity term to define")
+async def define(interaction: discord.Interaction, term: str):
+    entry = get_brevity_term_by_name(term)
+    if not entry:
+        await interaction.response.send_message(f"No definition found for '{term}'.", ephemeral=True)
+        return
+    letter = entry['term'][0].upper()
+    wiki_url = f"https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code#{letter}"
+    embed = discord.Embed(
+        title=entry['term'],
+        url=wiki_url,
+        description=entry['definition'],
+        color=discord.Color.green()
+    )
+    embed.set_footer(text="Queried from Wikipedia – Multiservice Tactical Brevity Code")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # -------------------------------
 # DAILY POSTING LOOP
@@ -201,7 +234,7 @@ async def post_brevity_term():
     all_configs = load_config()
     for guild_id_str, config in all_configs.items():
         guild_id = int(guild_id_str)
-        channel = bot.get_channel(config["channel_id"])
+        channel = client.get_channel(config["channel_id"])
         if channel is None:
             print(f"❌ Channel {config['channel_id']} not found for guild {guild_id}.")
             continue
@@ -228,13 +261,14 @@ async def post_brevity_term():
 async def refresh_terms_daily():
     update_brevity_terms()
 
-@bot.event
+@client.event
 async def on_ready():
-    print(f"Logged in as {bot.user}")
+    print(f"Logged in as {client.user}")
+    await tree.sync()
     if not post_brevity_term.is_running():
         post_brevity_term.start()
     if not refresh_terms_daily.is_running():
         refresh_terms_daily.start()
 
 if __name__ == "__main__":
-    bot.run(DISCORD_BOT_TOKEN)
+    client.run(DISCORD_BOT_TOKEN)
