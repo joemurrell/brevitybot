@@ -1,7 +1,6 @@
 import discord
 from discord.ext import tasks
 from discord import app_commands
-import json
 import os
 import random
 import requests
@@ -9,7 +8,10 @@ import html
 from bs4 import BeautifulSoup
 import re
 import logging
+import redis
+import json
 from dotenv import load_dotenv
+from urllib.parse import urlparse
 
 # Load environment variables from .env file
 load_dotenv()
@@ -20,14 +22,25 @@ logging.getLogger("discord").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 # -------------------------------
+# REDIS CONFIGURATION
+# -------------------------------
+
+redis_url = os.getenv("REDIS_URL")
+parsed_url = urlparse(redis_url)
+r = redis.Redis(
+    host=parsed_url.hostname,
+    port=parsed_url.port,
+    password=parsed_url.password,
+    decode_responses=True
+)
+
+# -------------------------------
 # CONFIGURATION
 # -------------------------------
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 FLICKR_API_KEY = os.getenv("FLICKR_API_KEY")
-CONFIG_FILE = "config.json"
-USED_TERMS_FILE = "used_terms.json"
-TERMS_FILE = "brevity_terms.json"
+TERMS_KEY = "brevity_terms"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -44,38 +57,21 @@ def clean_term(term):
     return cleaned
 
 def load_used_terms(guild_id):
-    if not os.path.exists(USED_TERMS_FILE):
-        return []
-    with open(USED_TERMS_FILE, "r") as f:
-        data = json.load(f)
-        return data.get(str(guild_id), [])
+    return list(r.smembers(f"used_terms:{guild_id}"))
 
 def save_used_term(guild_id, term):
-    data = {}
-    if os.path.exists(USED_TERMS_FILE):
-        with open(USED_TERMS_FILE, "r") as f:
-            data = json.load(f)
-    terms = data.get(str(guild_id), [])
-    terms.append(term)
-    data[str(guild_id)] = terms
-    with open(USED_TERMS_FILE, "w") as f:
-        json.dump(data, f)
+    r.sadd(f"used_terms:{guild_id}", term)
 
 def save_config(guild_id, channel_id):
-    config = {}
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
-            config = json.load(f)
-    config[str(guild_id)] = {"channel_id": channel_id}
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f)
+    r.hset("config", str(guild_id), channel_id)
 
 def load_config(guild_id=None):
-    if not os.path.exists(CONFIG_FILE):
-        return {} if guild_id is None else None
-    with open(CONFIG_FILE, "r") as f:
-        config = json.load(f)
-    return config if guild_id is None else config.get(str(guild_id))
+    if guild_id:
+        channel_id = r.hget("config", str(guild_id))
+        return {"channel_id": int(channel_id)} if channel_id else None
+    else:
+        all_configs = r.hgetall("config")
+        return {gid: {"channel_id": int(cid)} for gid, cid in all_configs.items()}
 
 def get_random_flickr_jet(api_key):
     flickr_url = "https://www.flickr.com/services/rest/"
@@ -132,49 +128,48 @@ def parse_brevity_terms():
     return terms
 
 def update_brevity_terms():
-    try:
-        with open(TERMS_FILE, "r", encoding="utf-8") as f:
-            existing = json.load(f)
-    except FileNotFoundError:
+    existing = r.get(TERMS_KEY)
+    if existing:
+        existing = json.loads(existing)
+        existing_terms_set = {t["term"] for t in existing}
+    else:
         existing = []
-    existing_terms_set = {t["term"] for t in existing}
+        existing_terms_set = set()
     new_terms = parse_brevity_terms()
     new_unique = [t for t in new_terms if t["term"] not in existing_terms_set]
     if new_unique:
         print(f"Found {len(new_unique)} new terms. Adding...")
         existing.extend(new_unique)
-        with open(TERMS_FILE, "w", encoding="utf-8") as f:
-            json.dump(existing, f, ensure_ascii=False, indent=2)
+        r.set(TERMS_KEY, json.dumps(existing))
     else:
         print("No new terms found.")
 
+def get_all_terms():
+    terms_data = r.get(TERMS_KEY)
+    if not terms_data:
+        return []
+    return json.loads(terms_data)
+
 def get_next_brevity_term(guild_id):
-    try:
-        with open(TERMS_FILE, "r", encoding="utf-8") as f:
-            all_terms = json.load(f)
-    except FileNotFoundError:
-        print("❌ brevity_terms.json not found.")
+    all_terms = get_all_terms()
+    if not all_terms:
+        print("❌ No brevity terms available in Redis.")
         return None
     used_terms = load_used_terms(guild_id)
     unused_terms = [t for t in all_terms if t["term"] not in used_terms]
     if not unused_terms:
         print(f"All terms used for guild {guild_id} — resetting list.")
         unused_terms = all_terms
-        with open(USED_TERMS_FILE, "w") as f:
-            json.dump({}, f)
+        r.delete(f"used_terms:{guild_id}")
     chosen = random.choice(unused_terms)
     save_used_term(guild_id, chosen["term"])
     return chosen
 
 def get_brevity_term_by_name(term_name):
-    try:
-        with open(TERMS_FILE, "r", encoding="utf-8") as f:
-            all_terms = json.load(f)
-        for entry in all_terms:
-            if entry["term"].lower() == term_name.lower():
-                return entry
-    except FileNotFoundError:
-        print("❌ brevity_terms.json not found.")
+    all_terms = get_all_terms()
+    for entry in all_terms:
+        if entry["term"].lower() == term_name.lower():
+            return entry
     return None
 
 # -------------------------------
@@ -190,7 +185,7 @@ async def setup(interaction: discord.Interaction):
 async def newterm(interaction: discord.Interaction):
     term = get_next_brevity_term(interaction.guild.id)
     if not term:
-        await interaction.response.send_message("No terms available. Please check the brevity terms file.", ephemeral=True)
+        await interaction.response.send_message("No terms available. Please check the brevity terms.", ephemeral=True)
         return
     image_url = get_random_flickr_jet(FLICKR_API_KEY)
     letter = term['term'][0].upper()
