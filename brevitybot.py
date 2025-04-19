@@ -107,7 +107,7 @@ def get_random_flickr_jet(api_key):
         photo = random.choice(photos)
         return f"https://farm{photo['farm']}.staticflickr.com/{photo['server']}/{photo['id']}_{photo['secret']}_b.jpg"
     except Exception as e:
-        print(f"❌ Flickr image fetch failed: {e}")
+        print(f"Flickr image fetch failed: {e}")
         return None
 
 def parse_brevity_terms():
@@ -161,7 +161,7 @@ def get_all_terms():
 def get_next_brevity_term(guild_id):
     all_terms = get_all_terms()
     if not all_terms:
-        print("❌ No brevity terms available in Redis.")
+        print("No brevity terms available in Redis database.")
         return None
     used_terms = load_used_terms(guild_id)
     unused_terms = [t for t in all_terms if t["term"] not in used_terms]
@@ -231,39 +231,46 @@ async def define(interaction: discord.Interaction, term: str):
 @tree.command(name="reloadterms", description="Manually refresh brevity terms from Wikipedia.")
 async def reloadterms(interaction: discord.Interaction):
     update_brevity_terms()
-    await interaction.response.send_message("✅ Brevity terms reloaded from Wikipedia.", ephemeral=True)
+    await interaction.response.send_message("Brevity terms reloaded from Wikipedia.", ephemeral=True)
 
 # -------------------------------
 # DAILY POSTING LOOP
 # -------------------------------
 
-@tasks.loop(hours=24)
+@tasks.loop(hours=1)
 async def post_brevity_term():
     all_configs = load_config()
     for guild_id_str, config in all_configs.items():
-        guild_id = int(guild_id_str)
-        channel = client.get_channel(config["channel_id"])
-        if channel is None:
-            print(f"❌ Channel {config['channel_id']} not found for guild {guild_id}.")
-            continue
-        term = get_next_brevity_term(guild_id)
-        if not term:
-            continue
-        image_url = get_random_flickr_jet(FLICKR_API_KEY)
-        letter = term['term'][0].upper()
-        wiki_url = f"https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code#{letter}"
-        await channel.send("Brevity Term of the Day")
-        embed = discord.Embed(
-            title=term['term'],
-            url=wiki_url,
-            description=term['definition'],
-            color=discord.Color.blue()
-        )
-        if image_url:
-            embed.set_image(url=image_url)
-        embed.set_footer(text="From Wikipedia – Multiservice Tactical Brevity Code")
-        await channel.send(embed=embed)
-        print(f"Sent to guild {guild_id}: {term['term']}")
+        try:
+            guild_id = int(guild_id_str)
+            channel = client.get_channel(config["channel_id"])
+            if channel is None:
+                logging.warning(f"Channel {config['channel_id']} not found for guild {guild_id}.")
+                continue
+
+            term = get_next_brevity_term(guild_id)
+            if not term:
+                logging.info(f"No terms available for guild {guild_id}.")
+                continue
+
+            image_url = get_random_flickr_jet(FLICKR_API_KEY)
+            letter = term['term'][0].upper()
+            wiki_url = f"https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code#{letter}"
+
+            await channel.send("Brevity Term of the Day")
+            embed = discord.Embed(
+                title=term['term'],
+                url=wiki_url,
+                description=term['definition'],
+                color=discord.Color.blue()
+            )
+            if image_url:
+                embed.set_image(url=image_url)
+            embed.set_footer(text="From Wikipedia – Multiservice Tactical Brevity Code")
+            await channel.send(embed=embed)
+            logging.info(f"Sent to guild {guild_id}: {term['term']}")
+        except Exception as e:
+            logging.error(f"Error posting term for guild {guild_id_str}: {e}")
 
 @tasks.loop(hours=24)
 async def refresh_terms_daily():
