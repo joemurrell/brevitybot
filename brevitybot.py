@@ -32,7 +32,7 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 redis_url = os.getenv("REDIS_URL")
 if not redis_url:
-    raise ValueError("❌ REDIS_URL environment variable not set!")
+    raise ValueError("REDIS_URL environment variable not set!")
 parsed_url = urlparse(redis_url)
 r = redis.Redis(
     host=parsed_url.hostname,
@@ -182,7 +182,7 @@ def get_next_brevity_term(guild_id):
     used_terms = load_used_terms(guild_id)
     unused_terms = [t for t in all_terms if t["term"] not in used_terms]
     if not unused_terms:
-        print(f"All terms used for guild {guild_id} — resetting list.")
+        print(f"All terms used for guild {guild_id} -- resetting list.")
         unused_terms = all_terms
         r.delete(f"used_terms:{guild_id}")
     chosen = random.choice(unused_terms)
@@ -200,54 +200,6 @@ def get_brevity_term_by_name(term_name):
 # SLASH COMMANDS
 # -------------------------------
 
-@tree.command(name="setup", description="Set the current channel for daily brevity posts.")
-async def setup(interaction: discord.Interaction):
-    save_config(interaction.guild.id, interaction.channel.id)
-    await interaction.response.send_message(f"Setup complete! I’ll post daily here in <#{interaction.channel.id}>.", ephemeral=True)
-
-@tree.command(name="newterm", description="Send a new brevity term immediately.")
-async def newterm(interaction: discord.Interaction):
-    term = get_next_brevity_term(interaction.guild.id)
-    if not term:
-        await interaction.response.send_message("No terms available. Please check the brevity terms.", ephemeral=True)
-        return
-    image_url = get_random_flickr_jet(FLICKR_API_KEY)
-    letter = term['term'][0].upper()
-    wiki_url = f"https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code#{letter}"
-    embed = discord.Embed(
-        title=term['term'],
-        url=wiki_url,
-        description=term['definition'],
-        color=discord.Color.blue()
-    )
-    if image_url:
-        embed.set_image(url=image_url)
-    embed.set_footer(text="From Wikipedia – Multiservice Tactical Brevity Code")
-    await interaction.response.send_message(embed=embed)
-
-@tree.command(name="define", description="Look up the definition of a brevity term (without tracking it).")
-@app_commands.describe(term="The brevity term to define")
-async def define(interaction: discord.Interaction, term: str):
-    entry = get_brevity_term_by_name(term)
-    if not entry:
-        await interaction.response.send_message(f"No definition found for '{term}'.", ephemeral=True)
-        return
-    letter = entry['term'][0].upper()
-    wiki_url = f"https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code#{letter}"
-    embed = discord.Embed(
-        title=entry['term'],
-        url=wiki_url,
-        description=entry['definition'],
-        color=discord.Color.green()
-    )
-    embed.set_footer(text="Queried from Wikipedia – Multiservice Tactical Brevity Code")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@tree.command(name="reloadterms", description="Manually refresh brevity terms from Wikipedia.")
-async def reloadterms(interaction: discord.Interaction):
-    update_brevity_terms()
-    await interaction.response.send_message("Brevity terms reloaded from Wikipedia.", ephemeral=True)
-
 @tree.command(name="setfrequency", description="Set how often (in hours) brevity terms are posted.")
 @app_commands.describe(hours="Number of hours between posts (min 1, max 24)")
 async def setfrequency(interaction: discord.Interaction, hours: int):
@@ -255,59 +207,7 @@ async def setfrequency(interaction: discord.Interaction, hours: int):
         await interaction.response.send_message("Please enter a value between 1 and 24 hours.", ephemeral=True)
         return
     set_post_frequency(interaction.guild.id, hours)
-    await interaction.response.send_message(f"✅ Frequency updated: Terms will now be posted every {hours} hour(s).", ephemeral=True)
-
-# -------------------------------
-# DAILY POSTING LOOP
-# -------------------------------
-
-@tasks.loop(minutes=15)
-async def post_brevity_term():
-    all_configs = load_config()
-    for guild_id_str, config in all_configs.items():
-        try:
-            guild_id = int(guild_id_str)
-            freq_hours = get_post_frequency(guild_id)
-            last_posted = get_last_posted(guild_id)
-            now = time.time()
-
-            if now - last_posted < freq_hours * 3600:
-                continue
-
-            channel = client.get_channel(config["channel_id"])
-            if channel is None:
-                logging.warning(f"Channel {config['channel_id']} not found for guild {guild_id}.")
-                continue
-
-            term = get_next_brevity_term(guild_id)
-            if not term:
-                logging.info(f"No terms available for guild {guild_id}.")
-                continue
-
-            image_url = get_random_flickr_jet(FLICKR_API_KEY)
-            letter = term['term'][0].upper()
-            wiki_url = f"https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code#{letter}"
-
-            await channel.send("Brevity Term of the Day")
-            embed = discord.Embed(
-                title=term['term'],
-                url=wiki_url,
-                description=term['definition'],
-                color=discord.Color.blue()
-            )
-            if image_url:
-                embed.set_image(url=image_url)
-            embed.set_footer(text="From Wikipedia – Multiservice Tactical Brevity Code")
-            await channel.send(embed=embed)
-
-            set_last_posted(guild_id, now)
-            logging.info(f"Sent to guild {guild_id}: {term['term']}")
-        except Exception as e:
-            logging.error(f"Error posting term for guild {guild_id_str}: {e}")
-
-@tasks.loop(hours=24)
-async def refresh_terms_daily():
-    update_brevity_terms()
+    await interaction.response.send_message(f"Frequency updated: Terms will now be posted every {hours} hour(s).", ephemeral=True)
 
 @client.event
 async def on_ready():
@@ -317,6 +217,3 @@ async def on_ready():
         post_brevity_term.start()
     if not refresh_terms_daily.is_running():
         refresh_terms_daily.start()
-
-if __name__ == "__main__":
-    client.run(DISCORD_BOT_TOKEN)
