@@ -17,15 +17,6 @@ import time
 # Load environment variables from .env file
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] [%(levelname)8s] %(name)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logging.getLogger("discord").setLevel(logging.ERROR)
-logging.getLogger("urllib3").setLevel(logging.WARNING)
-
 # -------------------------------
 # REDIS CONFIGURATION
 # -------------------------------
