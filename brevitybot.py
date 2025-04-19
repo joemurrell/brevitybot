@@ -209,6 +209,21 @@ async def setfrequency(interaction: discord.Interaction, hours: int):
     set_post_frequency(interaction.guild.id, hours)
     await interaction.response.send_message(f"Frequency updated: Terms will now be posted every {hours} hour(s).", ephemeral=True)
 
+@tasks.loop(hours=1)
+async def post_brevity_term():
+    for guild_id, config in load_config().items():
+        channel_id = config["channel_id"]
+        channel = client.get_channel(channel_id)
+        if channel:
+            term = get_next_brevity_term(guild_id)
+            if term:
+                await channel.send(f"**{term['term']}**: {term['definition']}")
+            set_last_posted(guild_id, time.time())
+
+@tasks.loop(hours=24)
+async def refresh_terms_daily():
+    update_brevity_terms()
+
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
