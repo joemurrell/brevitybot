@@ -12,6 +12,7 @@ import redis
 import json
 from dotenv import load_dotenv
 from urllib.parse import urlparse
+import time
 
 # Load environment variables from .env file
 load_dotenv()
@@ -22,7 +23,6 @@ logging.basicConfig(
     format='[%(asctime)s] [%(levelname)8s] %(name)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
-# Suppress noisy third-party libraries
 logging.getLogger("discord").setLevel(logging.ERROR)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
@@ -49,6 +49,8 @@ DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 FLICKR_API_KEY = os.getenv("FLICKR_API_KEY")
 TERMS_KEY = "brevity_terms"
 CHANNEL_MAP_KEY = "post_channels"
+FREQ_KEY_PREFIX = "post_freq:"
+LAST_POSTED_KEY_PREFIX = "last_posted:"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -81,6 +83,19 @@ def load_config(guild_id=None):
     else:
         all_configs = r.hgetall(CHANNEL_MAP_KEY)
         return {gid: {"channel_id": int(cid)} for gid, cid in all_configs.items()}
+
+def set_post_frequency(guild_id, hours):
+    r.set(f"{FREQ_KEY_PREFIX}{guild_id}", hours)
+
+def get_post_frequency(guild_id):
+    return int(r.get(f"{FREQ_KEY_PREFIX}{guild_id}") or 24)
+
+def set_last_posted(guild_id, timestamp):
+    r.set(f"{LAST_POSTED_KEY_PREFIX}{guild_id}", str(timestamp))
+
+def get_last_posted(guild_id):
+    ts = r.get(f"{LAST_POSTED_KEY_PREFIX}{guild_id}")
+    return float(ts) if ts else 0.0
 
 def get_random_flickr_jet(api_key):
     flickr_url = "https://www.flickr.com/services/rest/"
@@ -209,7 +224,6 @@ async def newterm(interaction: discord.Interaction):
         embed.set_image(url=image_url)
     embed.set_footer(text="From Wikipedia – Multiservice Tactical Brevity Code")
     await interaction.response.send_message(embed=embed)
-    print(f"Manually sent to {interaction.guild.name}: {term['term']}")
 
 @tree.command(name="define", description="Look up the definition of a brevity term (without tracking it).")
 @app_commands.describe(term="The brevity term to define")
@@ -234,16 +248,32 @@ async def reloadterms(interaction: discord.Interaction):
     update_brevity_terms()
     await interaction.response.send_message("Brevity terms reloaded from Wikipedia.", ephemeral=True)
 
+@tree.command(name="setfrequency", description="Set how often (in hours) brevity terms are posted.")
+@app_commands.describe(hours="Number of hours between posts (min 1, max 24)")
+async def setfrequency(interaction: discord.Interaction, hours: int):
+    if hours < 1 or hours > 24:
+        await interaction.response.send_message("Please enter a value between 1 and 24 hours.", ephemeral=True)
+        return
+    set_post_frequency(interaction.guild.id, hours)
+    await interaction.response.send_message(f"✅ Frequency updated: Terms will now be posted every {hours} hour(s).", ephemeral=True)
+
 # -------------------------------
 # DAILY POSTING LOOP
 # -------------------------------
 
-@tasks.loop(hours=1)
+@tasks.loop(minutes=15)
 async def post_brevity_term():
     all_configs = load_config()
     for guild_id_str, config in all_configs.items():
         try:
             guild_id = int(guild_id_str)
+            freq_hours = get_post_frequency(guild_id)
+            last_posted = get_last_posted(guild_id)
+            now = time.time()
+
+            if now - last_posted < freq_hours * 3600:
+                continue
+
             channel = client.get_channel(config["channel_id"])
             if channel is None:
                 logging.warning(f"Channel {config['channel_id']} not found for guild {guild_id}.")
@@ -269,6 +299,8 @@ async def post_brevity_term():
                 embed.set_image(url=image_url)
             embed.set_footer(text="From Wikipedia – Multiservice Tactical Brevity Code")
             await channel.send(embed=embed)
+
+            set_last_posted(guild_id, now)
             logging.info(f"Sent to guild {guild_id}: {term['term']}")
         except Exception as e:
             logging.error(f"Error posting term for guild {guild_id_str}: {e}")
