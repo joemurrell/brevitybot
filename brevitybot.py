@@ -62,7 +62,7 @@ tree = app_commands.CommandTree(client)
 def clean_term(term):
     cleaned = re.sub(r"\s*\[.*?\]", "", term)
     cleaned = cleaned.replace("*", "").strip()
-    return cleaned
+    return cleaned.upper()
 
 def load_used_terms(guild_id):
     return list(r.smembers(f"used_terms:{guild_id}"))
