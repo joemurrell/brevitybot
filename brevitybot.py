@@ -52,6 +52,7 @@ CHANNEL_MAP_KEY = "post_channels"
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.guilds = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
@@ -131,7 +132,7 @@ def parse_brevity_terms():
             current_term = term_text if capture else None
         elif tag.name == "dd" and capture and current_term:
             definition_text = tag.get_text(" ", strip=True)
-            terms.append({"term": clean_term(current_term), "definition": definition_text})
+            terms.append({"term": clean_term(current_term).upper(), "definition": definition_text})
             current_term = None
     return terms
 
