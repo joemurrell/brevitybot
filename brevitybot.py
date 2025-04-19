@@ -209,16 +209,49 @@ async def setfrequency(interaction: discord.Interaction, hours: int):
     set_post_frequency(interaction.guild.id, hours)
     await interaction.response.send_message(f"Frequency updated: Terms will now be posted every {hours} hour(s).", ephemeral=True)
 
-@tasks.loop(hours=1)
+@tasks.loop(minutes=15)
 async def post_brevity_term():
-    for guild_id, config in load_config().items():
-        channel_id = config["channel_id"]
-        channel = client.get_channel(channel_id)
-        if channel:
+    all_configs = load_config()
+    for guild_id_str, config in all_configs.items():
+        try:
+            guild_id = int(guild_id_str)
+            freq_hours = get_post_frequency(guild_id)
+            last_posted = get_last_posted(guild_id)
+            now = time.time()
+
+            if now - last_posted < freq_hours * 3600:
+                continue
+
+            channel = client.get_channel(config["channel_id"])
+            if channel is None:
+                logging.warning(f"Channel {config['channel_id']} not found for guild {guild_id}.")
+                continue
+
             term = get_next_brevity_term(guild_id)
-            if term:
-                await channel.send(f"**{term['term']}**: {term['definition']}")
-            set_last_posted(guild_id, time.time())
+            if not term:
+                logging.info(f"No terms available for guild {guild_id}.")
+                continue
+
+            image_url = get_random_flickr_jet(FLICKR_API_KEY)
+            letter = term['term'][0].upper()
+            wiki_url = f"https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code#{letter}"
+
+            await channel.send("Brevity Term of the Day")
+            embed = discord.Embed(
+                title=term['term'],
+                url=wiki_url,
+                description=term['definition'],
+                color=discord.Color.blue()
+            )
+            if image_url:
+                embed.set_image(url=image_url)
+            embed.set_footer(text="From Wikipedia – Multiservice Tactical Brevity Code")
+            await channel.send(embed=embed)
+
+            set_last_posted(guild_id, now)
+            logging.info(f"Sent to guild {guild_id}: {term['term']}")
+        except Exception as e:
+            logging.error(f"Error posting term for guild {guild_id_str}: {e}")
 
 @tasks.loop(hours=24)
 async def refresh_terms_daily():
