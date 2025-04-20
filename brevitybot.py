@@ -14,8 +14,17 @@ from dotenv import load_dotenv
 from urllib.parse import urlparse
 import time
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from .env file. Uncomment for local testing.
+# load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] [%(levelname)8s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logging.getLogger("discord").setLevel(logging.ERROR)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 # -------------------------------
 # REDIS CONFIGURATION
@@ -31,6 +40,7 @@ r = redis.Redis(
     password=parsed_url.password,
     decode_responses=True
 )
+logging.info(f"Connected to Redis at {parsed_url.hostname}:{parsed_url.port}")
 
 # -------------------------------
 # CONFIGURATION
@@ -38,6 +48,9 @@ r = redis.Redis(
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 FLICKR_API_KEY = os.getenv("FLICKR_API_KEY")
+logging.info(f"DISCORD_BOT_TOKEN loaded: {'Yes' if DISCORD_BOT_TOKEN else 'No'}")
+logging.info(f"FLICKR_API_KEY loaded: {'Yes' if FLICKR_API_KEY else 'No'}")
+
 TERMS_KEY = "brevity_terms"
 CHANNEL_MAP_KEY = "post_channels"
 FREQ_KEY_PREFIX = "post_freq:"
@@ -251,8 +264,18 @@ async def refresh_terms_daily():
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
+    logging.info(f"Bot is ready. Logged in as {client.user} (ID: {client.user.id})")
+    logging.info(f"Connected to {len(client.guilds)} guild(s): {[g.name for g in client.guilds]}")
     await tree.sync()
     if not post_brevity_term.is_running():
         post_brevity_term.start()
+        logging.info("post_brevity_term loop started.")
     if not refresh_terms_daily.is_running():
         refresh_terms_daily.start()
+        logging.info("refresh_terms_daily loop started.")
+
+if __name__ == "__main__":
+    if not DISCORD_BOT_TOKEN:
+        raise ValueError("DISCORD_BOT_TOKEN is not set in environment!")
+    logging.info("Starting Discord bot...")
+    client.run(DISCORD_BOT_TOKEN)
