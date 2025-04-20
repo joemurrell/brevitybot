@@ -17,15 +17,6 @@ import time
 # Load environment variables from .env file. Uncomment for local testing.
 # load_dotenv()
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] [%(levelname)8s] %(name)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logging.getLogger("discord").setLevel(logging.ERROR)
-logging.getLogger("urllib3").setLevel(logging.WARNING)
-
 # -------------------------------
 # REDIS CONFIGURATION
 # -------------------------------
@@ -275,7 +266,10 @@ async def on_ready():
         logging.info("refresh_terms_daily loop started.")
 
 if __name__ == "__main__":
-    if not DISCORD_BOT_TOKEN:
-        raise ValueError("DISCORD_BOT_TOKEN is not set in environment!")
-    logging.info("Starting Discord bot...")
-    client.run(DISCORD_BOT_TOKEN)
+    try:
+        if not DISCORD_BOT_TOKEN:
+            raise ValueError("DISCORD_BOT_TOKEN is not set in environment!")
+        logging.info("Starting Discord bot...")
+        client.run(DISCORD_BOT_TOKEN)
+    except Exception as e:
+        logging.exception("Bot failed to start due to an exception:")
