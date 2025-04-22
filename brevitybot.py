@@ -285,7 +285,6 @@ async def post_brevity_term():
             letter = term['term'][0].upper()
             wiki_url = f"https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code#{letter}"
 
-            await channel.send()
             embed = discord.Embed(
                 title=term['term'],
                 url=wiki_url,
