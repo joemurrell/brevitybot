@@ -13,7 +13,7 @@
 ## How It Works
 
 - Pulls and caches terms from [Wikipedia](https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code)
-- Stores config and usage in Redis, including:
+- Stores config and usage in a Redis database, including:
   - Last posted time per guild
   - Used term history per guild
   - Custom post frequencies
@@ -29,7 +29,7 @@
 
 ## Environment Variables
 
-These should be set in Railway, a `.env` file, or your hosting environment:
+These should be set in a `.env` file or your hosting environment:
 
 ```env
 DISCORD_BOT_TOKEN=your-discord-token
