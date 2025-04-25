@@ -9,6 +9,8 @@
 - `/define <term>` — Look up a term's definition without marking it as used
 - `/reloadterms` — Refresh the term list from Wikipedia
 - `/setfrequency <1-24>` — Set posting frequency per server (in hours)
+- `/enableposting` — Enable automatic daily posting of brevity terms in the current channel.
+- `/disableposting` — Disable automatic daily posting of brevity terms in the current channel.
 
 ## How It Works
 
@@ -35,3 +37,4 @@ These should be set in a `.env` file or your hosting environment:
 DISCORD_BOT_TOKEN=your-discord-token
 REDIS_URL=redis://default:password@host:port
 FLICKR_API_KEY=your-flickr-api-key
+```
