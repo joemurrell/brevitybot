@@ -142,55 +142,7 @@ def get_random_flickr_jet(api_key):
     except Exception as e:
         logger.error("Flickr fetch error: %s", e)
         return None
-
-
-    url = "https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code"
-    response = requests.get(url)
-    soup = BeautifulSoup(response.content, "html.parser")
-    content_div = soup.find("div", class_="mw-parser-output")
-    terms = []
-
-    if not content_div:
-        logger.warning("Couldn't find Wikipedia content container.")
-        return terms
-
-    tags = list(content_div.find_all(["h2", "dt", "dd", "ul", "ol"]))
-    current_term = None
-    current_definition_parts = []
-
-    def flush_term():
-        nonlocal current_term, current_definition_parts
-        if current_term and current_definition_parts:
-            definition = "\n".join(current_definition_parts).strip()
-            terms.append({
-                "term": clean_term(current_term),
-                "definition": definition
-            })
-        current_term = None
-        current_definition_parts = []
-
-    for i, tag in enumerate(tags):
-        if tag.name == "h2":
-            heading_text = tag.get_text(" ", strip=True).lower()
-            if any(x in heading_text for x in ["see also", "references", "footnotes", "sources"]):
-                logger.debug("Stopping parse at section: %s", heading_text)
-                break  # Stop parsing when we reach non-term sections
-        elif tag.name == "dt":
-            flush_term()
-            for sup in tag.find_all("sup"):
-                sup.extract()
-            current_term = tag.get_text(" ", strip=True)
-            current_definition_parts = []
-        elif tag.name == "dd" and current_term:
-            current_definition_parts.append(tag.get_text(" ", strip=True))
-        elif tag.name in ["ul", "ol"] and current_term:
-            bullets = [f"- {li.get_text(' ', strip=True)}" for li in tag.find_all("li")]
-            current_definition_parts.extend(bullets)
-
-    flush_term()
-    logger.info("Parsed %d brevity terms.", len(terms))
-    return terms
-
+    
 def parse_brevity_terms():
     url = "https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code"
     response = requests.get(url)
@@ -329,7 +281,7 @@ async def reloadterms(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     total, added, updated = update_brevity_terms()
     await interaction.followup.send(
-        f"Terms updated. Total: {total}. New added: {added}. Existing updated: {updated}.", ephemeral=True
+        f"Terms synced from Wiki. Total: {total}. New added: {added}. Existing updated: {updated}.", ephemeral=True
     )
 
 @tree.command(name="define", description="Look up the definition of a brevity term.")
