@@ -233,14 +233,21 @@ def get_next_brevity_term(guild_id):
     if not all_terms:
         logger.warning("No brevity terms available.")
         return None
+
     used_terms = load_used_terms(guild_id)
     unused_terms = [t for t in all_terms if t["term"] not in used_terms]
+
     if not unused_terms:
-        unused_terms = all_terms
+        # All terms have been used — reset
+        logger.info("All terms used for guild %s, resetting used terms.", guild_id)
         r.delete(f"used_terms:{guild_id}")
+        used_terms = []
+        unused_terms = all_terms  # now full list again
+
     chosen = random.choice(unused_terms)
     save_used_term(guild_id, chosen["term"])
     return chosen
+
 
 def get_brevity_term_by_name(name):
     for term in get_all_terms():
