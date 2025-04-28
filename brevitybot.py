@@ -144,6 +144,8 @@ def get_random_flickr_jet(api_key):
         return None
     
 def parse_brevity_terms():
+    import re
+
     url = "https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code"
     response = requests.get(url)
     soup = BeautifulSoup(response.content, "html.parser")
@@ -158,23 +160,26 @@ def parse_brevity_terms():
     current_term = None
     current_definition_parts = []
 
+    term_map = {}
+
     def flush_term():
         nonlocal current_term, current_definition_parts
         if current_term and current_definition_parts:
             definition = "\n".join(current_definition_parts).strip()
-            terms.append({
-                "term": clean_term(current_term),
+            cleaned_term = clean_term(current_term)
+            term_map[cleaned_term] = {
+                "term": cleaned_term,
                 "definition": definition
-            })
+            }
         current_term = None
         current_definition_parts = []
 
-    for i, tag in enumerate(tags):
+    for tag in tags:
         if tag.name == "h2":
             heading_text = tag.get_text(" ", strip=True).lower()
             if any(x in heading_text for x in ["see also", "references", "footnotes", "sources"]):
                 logger.debug("Stopping parse at section: %s", heading_text)
-                break  # Stop parsing when we reach non-term sections
+                break
         elif tag.name == "dt":
             flush_term()
             for sup in tag.find_all("sup"):
@@ -188,6 +193,21 @@ def parse_brevity_terms():
             current_definition_parts.extend(bullets)
 
     flush_term()
+
+    # Now handle glossary templates
+    raw_html = str(content_div)
+    glossary_pattern = re.compile(r"\{\{term \|1=(.*?)\}\}\s*\{\{defn \|1=(.*?)\}\}", re.DOTALL)
+    glossary_matches = glossary_pattern.findall(raw_html)
+
+    for term_name, defn_text in glossary_matches:
+        cleaned_term = clean_term(term_name)
+        definition = BeautifulSoup(defn_text.replace('<br>', '\n'), "html.parser").get_text(" ", strip=True)
+        term_map[cleaned_term] = {
+            "term": cleaned_term,
+            "definition": definition
+        }
+
+    terms = list(term_map.values())
     logger.info("Parsed %d brevity terms.", len(terms))
     return terms
 
