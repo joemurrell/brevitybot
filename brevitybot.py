@@ -191,38 +191,22 @@ def parse_brevity_terms():
     logger.info("Parsed %d brevity terms.", len(terms))
     return terms
 
-
 def update_brevity_terms():
-    existing_raw = r.get(TERMS_KEY)
-    existing = json.loads(existing_raw) if existing_raw else []
-    existing_map = {t["term"]: t for t in existing}  # map term -> {term, definition}
-
+    logger.info("Refreshing brevity terms from Wikipedia...")
     new_terms = parse_brevity_terms()
-    updated_count = 0
-    added_count = 0
 
-    for new_term in new_terms:
-        term_key = new_term["term"]
-        if term_key in existing_map:
-            old_def = existing_map[term_key]["definition"]
-            new_def = new_term["definition"]
-            if old_def != new_def:
-                logger.debug("Term changed: %s\n--- Old:\n%s\n--- New:\n%s", term_key, old_def, new_def)
-                existing_map[term_key]["definition"] = new_def
-                updated_count += 1
-        else:
-            existing_map[term_key] = new_term
-            added_count += 1
+    if not new_terms:
+        logger.warning("No brevity terms parsed. Keeping existing terms.")
+        return 0, 0, 0  # no action taken
 
+    logger.info("Parsed %d brevity terms. Replacing existing terms.", len(new_terms))
 
-    # Save the merged/updated terms back into Redis
-    updated_terms_list = list(existing_map.values())
-    r.set(TERMS_KEY, json.dumps(updated_terms_list))
-
+    # FULL RESYNC: Overwrite Redis completely
+    r.set(TERMS_KEY, json.dumps(new_terms))
     
+    logger.info("Successfully loaded %d brevity terms (full resync).", len(new_terms))
+    return len(new_terms), len(new_terms), 0  # all new terms
 
-    logger.info("Loaded %d total brevity terms (+%d new, %d updated).", len(updated_terms_list), added_count, updated_count)
-    return len(updated_terms_list), added_count, updated_count
 
 def get_all_terms():
     terms_data = r.get(TERMS_KEY)
@@ -266,7 +250,12 @@ async def setup(interaction: discord.Interaction):
 
 @tree.command(name="nextterm", description="Send a new brevity term immediately.")
 async def nextterm(interaction: discord.Interaction):
-    await interaction.response.defer()
+    try:
+        await interaction.response.defer(thinking=True)  # <-- always defer immediately
+    except discord.NotFound:
+        logger.warning("Interaction expired before defer could happen.")
+        return
+
     term = get_next_brevity_term(interaction.guild.id)
     if not term:
         await interaction.followup.send("No terms available.", ephemeral=True)
@@ -285,7 +274,12 @@ async def nextterm(interaction: discord.Interaction):
 
 @tree.command(name="reloadterms", description="Manually refresh brevity terms from Wikipedia.")
 async def reloadterms(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+    try:
+        await interaction.response.defer(ephemeral=True)  # <-- defer immediately
+    except discord.NotFound:
+        logger.warning("Interaction expired before defer could happen.")
+        return
+
     total, added, updated = update_brevity_terms()
     await interaction.followup.send(
         f"Terms synced from Wiki. Total: {total}. New added: {added}. Existing updated: {updated}.", ephemeral=True

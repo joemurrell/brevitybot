@@ -1,2 +1,5 @@
 .env
 *.json
+test_*
+__pycache__/
+dump.rdb
