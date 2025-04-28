@@ -219,14 +219,19 @@ def update_brevity_terms():
         logger.warning("No brevity terms parsed. Keeping existing terms.")
         return 0, 0, 0  # no action taken
 
-    logger.info("Parsed %d brevity terms. Replacing existing terms.", len(new_terms))
+    logger.info("Parsed %d brevity terms. Backing up and replacing existing terms.", len(new_terms))
+
+    # Backup current terms
+    existing_raw = r.get(TERMS_KEY)
+    if existing_raw:
+        r.set(f"{TERMS_KEY}_backup", existing_raw)
+        logger.info("Backed up existing terms to TERMS_KEY_backup.")
 
     # FULL RESYNC: Overwrite Redis completely
     r.set(TERMS_KEY, json.dumps(new_terms))
     
     logger.info("Successfully loaded %d brevity terms (full resync).", len(new_terms))
     return len(new_terms), len(new_terms), 0  # all new terms
-
 
 def get_all_terms():
     terms_data = r.get(TERMS_KEY)
@@ -355,6 +360,8 @@ async def post_brevity_term():
                 continue
             channel = client.get_channel(config["channel_id"])
             if not channel:
+                logger.warning("Channel %s not found for guild %s. Removing stale config.", config['channel_id'], guild_id)
+                r.hdel(CHANNEL_MAP_KEY, str(guild_id))
                 continue
             term = get_next_brevity_term(guild_id)
             if not term:
@@ -373,6 +380,8 @@ async def post_brevity_term():
             set_last_posted(guild_id, time.time())
         except Exception as e:
             logger.error("Failed to post to guild %s: %s", guild_id_str, e)
+
+
 
 @tasks.loop(hours=24)
 async def refresh_terms_daily():
@@ -396,3 +405,12 @@ if __name__ == "__main__":
     client.run(DISCORD_BOT_TOKEN)
 
 
+@client.event
+async def on_guild_remove(guild):
+    guild_id = guild.id
+    logger.info("Removed from guild %s (%s). Cleaning up Redis data...", guild_id, guild.name)
+    r.hdel(CHANNEL_MAP_KEY, str(guild_id))
+    r.delete(f"used_terms:{guild_id}")
+    r.delete(f"{FREQ_KEY_PREFIX}{guild_id}")
+    r.delete(f"{LAST_POSTED_KEY_PREFIX}{guild_id}")
+    r.srem(DISABLED_GUILDS_KEY, str(guild_id))
