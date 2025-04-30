@@ -289,7 +289,7 @@ async def nextterm(interaction: discord.Interaction):
         title=term['term'],
         description=term['definition'],
         color=discord.Color.blue(),
-        url=f"https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code#{term['term'][0]}"
+        url=f"https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code#{term['term'][0]}"
     )
     image_url = get_random_flickr_jet(FLICKR_API_KEY)
     if image_url:
