@@ -144,71 +144,46 @@ def get_random_flickr_jet(api_key):
         return None
     
 def parse_brevity_terms():
-    import re
+    import requests
+    from bs4 import BeautifulSoup
 
-    url = "https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code"
+    url = "https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code"
     response = requests.get(url)
     soup = BeautifulSoup(response.content, "html.parser")
     content_div = soup.find("div", class_="mw-parser-output")
-    terms = []
 
     if not content_div:
         logger.warning("Couldn't find Wikipedia content container.")
-        return terms
+        return []
 
-    tags = list(content_div.find_all(["h2", "dt", "dd", "ul", "ol"]))
-    current_term = None
-    current_definition_parts = []
-
+    raw_html = str(content_div)
     term_map = {}
 
-    def flush_term():
-        nonlocal current_term, current_definition_parts
-        if current_term and current_definition_parts:
-            definition = "\n".join(current_definition_parts).strip()
-            cleaned_term = clean_term(current_term)
-            term_map[cleaned_term] = {
-                "term": cleaned_term,
+    # Match each block starting with {{term|...}} and containing one or more {{defn|...}}
+    term_blocks = re.findall(r"(\{\{term\|.*?\}\}(?:\s*\{\{defn\|.*?\}\})+)", raw_html, re.DOTALL)
+
+    def clean_term(term):
+        cleaned = re.sub(r"\s*\[.*?\]", "", term)
+        cleaned = cleaned.replace("*", "").strip()
+        return cleaned.upper()
+
+    for block in term_blocks:
+        term_match = re.search(r"\{\{term\|(?:1=)?(.*?)\}\}", block)
+        defn_matches = re.findall(r"\{\{defn\|(?:no=\d+\|)?1=(.*?)\}\}", block)
+
+        if term_match and defn_matches:
+            term = clean_term(term_match.group(1))
+            definition = "\n".join(
+                BeautifulSoup(d, "html.parser").get_text(" ", strip=True)
+                for d in defn_matches
+            )
+            term_map[term] = {
+                "term": term,
                 "definition": definition
             }
-        current_term = None
-        current_definition_parts = []
-
-    for tag in tags:
-        if tag.name == "h2":
-            heading_text = tag.get_text(" ", strip=True).lower()
-            if any(x in heading_text for x in ["see also", "references", "footnotes", "sources"]):
-                logger.debug("Stopping parse at section: %s", heading_text)
-                break
-        elif tag.name == "dt":
-            flush_term()
-            for sup in tag.find_all("sup"):
-                sup.extract()
-            current_term = tag.get_text(" ", strip=True)
-            current_definition_parts = []
-        elif tag.name == "dd" and current_term:
-            current_definition_parts.append(tag.get_text(" ", strip=True))
-        elif tag.name in ["ul", "ol"] and current_term:
-            bullets = [f"- {li.get_text(' ', strip=True)}" for li in tag.find_all("li")]
-            current_definition_parts.extend(bullets)
-
-    flush_term()
-
-    # Now handle glossary templates
-    raw_html = str(content_div)
-    glossary_pattern = re.compile(r"\{\{term \|1=(.*?)\}\}\s*\{\{defn \|1=(.*?)\}\}", re.DOTALL)
-    glossary_matches = glossary_pattern.findall(raw_html)
-
-    for term_name, defn_text in glossary_matches:
-        cleaned_term = clean_term(term_name)
-        definition = BeautifulSoup(defn_text.replace('<br>', '\n'), "html.parser").get_text(" ", strip=True)
-        term_map[cleaned_term] = {
-            "term": cleaned_term,
-            "definition": definition
-        }
 
     terms = list(term_map.values())
-    logger.info("Parsed %d brevity terms.", len(terms))
+    logger.info("Parsed %d brevity terms (from glossary template format).", len(terms))
     return terms
 
 def update_brevity_terms():
