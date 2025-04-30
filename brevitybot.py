@@ -110,9 +110,12 @@ def is_posting_enabled(guild_id):
 
 def enable_posting(guild_id):
     r.srem(DISABLED_GUILDS_KEY, str(guild_id))
+    logger.info("Posting enabled for guild %s", guild_id)
 
 def disable_posting(guild_id):
     r.sadd(DISABLED_GUILDS_KEY, str(guild_id))
+    logger.info("Posting disabled for guild %s", guild_id)
+
 
 def get_random_flickr_jet(api_key):
     flickr_url = "https://www.flickr.com/services/rest/"
@@ -144,47 +147,61 @@ def get_random_flickr_jet(api_key):
         return None
     
 def parse_brevity_terms():
-    import requests
-    from bs4 import BeautifulSoup
 
     url = "https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code"
     response = requests.get(url)
     soup = BeautifulSoup(response.content, "html.parser")
     content_div = soup.find("div", class_="mw-parser-output")
+    terms = []
 
     if not content_div:
         logger.warning("Couldn't find Wikipedia content container.")
-        return []
+        return terms
 
-    raw_html = str(content_div)
-    term_map = {}
+    tags = list(content_div.find_all(["h2", "dt", "dd", "ul", "ol"]))
+    current_term = None
+    current_definition_parts = []
 
-    # Match each block starting with {{term|...}} and containing one or more {{defn|...}}
-    term_blocks = re.findall(r"(\{\{term\|.*?\}\}(?:\s*\{\{defn\|.*?\}\})+)", raw_html, re.DOTALL)
-
-    def clean_term(term):
-        cleaned = re.sub(r"\s*\[.*?\]", "", term)
-        cleaned = cleaned.replace("*", "").strip()
-        return cleaned.upper()
-
-    for block in term_blocks:
-        term_match = re.search(r"\{\{term\|(?:1=)?(.*?)\}\}", block)
-        defn_matches = re.findall(r"\{\{defn\|(?:no=\d+\|)?1=(.*?)\}\}", block)
-
-        if term_match and defn_matches:
-            term = clean_term(term_match.group(1))
-            definition = "\n".join(
-                BeautifulSoup(d, "html.parser").get_text(" ", strip=True)
-                for d in defn_matches
-            )
-            term_map[term] = {
-                "term": term,
+    def flush_term():
+        nonlocal current_term, current_definition_parts
+        if current_term and current_definition_parts:
+            definition = "\n".join(current_definition_parts).strip()
+            cleaned_term = re.sub(r"\s*\[.*?\]", "", current_term).replace("*", "").strip().upper()
+            terms.append({
+                "term": cleaned_term,
                 "definition": definition
-            }
+            })
+        current_term = None
+        current_definition_parts = []
 
-    terms = list(term_map.values())
-    logger.info("Parsed %d brevity terms (from glossary template format).", len(terms))
+    for tag in tags:
+        if tag.name == "h2":
+            heading_text = tag.get_text(" ", strip=True).lower()
+            if any(x in heading_text for x in ["see also", "references", "footnotes", "sources"]):
+                logger.debug("Stopping parse at section: %s", heading_text)
+                break
+        elif tag.name == "dt":
+            flush_term()
+            for sup in tag.find_all("sup"):  # Remove [citation needed], etc.
+                sup.decompose()
+            current_term = tag.get_text(" ", strip=True)
+            current_definition_parts = []
+        elif tag.name == "dd" and current_term:
+            for sup in tag.find_all("sup"):
+                sup.decompose()
+            for span in tag.find_all("span"):
+                span.decompose()
+            text = tag.get_text(" ", strip=True)
+            text = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", text)  # Clean [[wiki|link]]
+            current_definition_parts.append(text)
+        elif tag.name in ["ul", "ol"] and current_term:
+            bullets = [f"- {li.get_text(' ', strip=True)}" for li in tag.find_all("li")]
+            current_definition_parts.extend(bullets)
+
+    flush_term()
+    logger.info("Parsed %d brevity terms from HTML.", len(terms))
     return terms
+
 
 def update_brevity_terms():
     logger.info("Refreshing brevity terms from Wikipedia...")
@@ -237,7 +254,9 @@ def get_brevity_term_by_name(name):
     for term in get_all_terms():
         if term["term"].lower() == name.lower():
             return term
+    logger.info("No match found for brevity term: '%s'", name)
     return None
+
 
 # -------------------------------
 # SLASH COMMANDS
@@ -269,7 +288,7 @@ async def nextterm(interaction: discord.Interaction):
     image_url = get_random_flickr_jet(FLICKR_API_KEY)
     if image_url:
         embed.set_image(url=image_url)
-    embed.set_footer(text="From Wikipedia – Multiservice Tactical Brevity Code")
+    embed.set_footer(text="From Wikipedia – Multi-service Tactical Brevity Code")
     await interaction.followup.send(embed=embed)
 
 @tree.command(name="reloadterms", description="Manually refresh brevity terms from Wikipedia.")
@@ -284,6 +303,8 @@ async def reloadterms(interaction: discord.Interaction):
     await interaction.followup.send(
         f"Terms synced from Wiki. Total: {total}. New added: {added}. Existing updated: {updated}.", ephemeral=True
     )
+    logger.info("Manual reload triggered by guild %s", interaction.guild.id)
+
 
 @tree.command(name="define", description="Look up the definition of a brevity term.")
 @app_commands.describe(term="The brevity term to define")
@@ -296,7 +317,7 @@ async def define(interaction: discord.Interaction, term: str):
         title=entry['term'],
         description=entry['definition'],
         color=discord.Color.green(),
-        url=f"https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code#{entry['term'][0]}"
+        url=f"https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code#{entry['term'][0]}"
     )
     await interaction.response.send_message(embed=embed)
 
@@ -345,16 +366,20 @@ async def post_brevity_term():
                 title=term['term'],
                 description=term['definition'],
                 color=discord.Color.blue(),
-                url=f"https://en.wikipedia.org/wiki/Multiservice_tactical_brevity_code#{term['term'][0]}"
+                url=f"https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code#{term['term'][0]}"
             )
             image_url = get_random_flickr_jet(FLICKR_API_KEY)
             if image_url:
                 embed.set_image(url=image_url)
-            embed.set_footer(text="From Wikipedia – Multiservice Tactical Brevity Code")
+            embed.set_footer(text="From Wikipedia – Multi-service Tactical Brevity Code")
             await channel.send(embed=embed)
             set_last_posted(guild_id, time.time())
+            logger.info("Posted term '%s' to guild %s (#%s)", term['term'], guild_id, config["channel_id"])
+
         except Exception as e:
             logger.error("Failed to post to guild %s: %s", guild_id_str, e)
+
+
 
 
 
