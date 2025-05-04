@@ -209,7 +209,7 @@ def update_brevity_terms():
 
     if not new_terms:
         logger.warning("No brevity terms parsed. Keeping existing terms.")
-        return 0, 0, 0  # no action taken
+        return 0, 0, 0 
 
     logger.info("Parsed %d brevity terms. Comparing with existing terms.", len(new_terms))
 
