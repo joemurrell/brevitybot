@@ -211,19 +211,35 @@ def update_brevity_terms():
         logger.warning("No brevity terms parsed. Keeping existing terms.")
         return 0, 0, 0  # no action taken
 
-    logger.info("Parsed %d brevity terms. Backing up and replacing existing terms.", len(new_terms))
+    logger.info("Parsed %d brevity terms. Comparing with existing terms.", len(new_terms))
+
+    # Load existing terms
+    existing_raw = r.get(TERMS_KEY)
+    existing_terms = json.loads(existing_raw) if existing_raw else []
+
+    # Create dictionaries for comparison
+    existing_terms_dict = {term['term']: term for term in existing_terms}
+    new_terms_dict = {term['term']: term for term in new_terms}
+
+    # Determine added, updated, and unchanged terms
+    added_terms = [term for term in new_terms if term['term'] not in existing_terms_dict]
+    updated_terms = [term for term in new_terms if term['term'] in existing_terms_dict and term != existing_terms_dict[term['term']]]
+    unchanged_terms = [term for term in new_terms if term['term'] in existing_terms_dict and term == existing_terms_dict[term['term']]]
 
     # Backup current terms
-    existing_raw = r.get(TERMS_KEY)
     if existing_raw:
         r.set(f"{TERMS_KEY}_backup", existing_raw)
         logger.info("Backed up existing terms to TERMS_KEY_backup.")
 
-    # FULL RESYNC: Overwrite Redis completely
+    # Update Redis with new terms
     r.set(TERMS_KEY, json.dumps(new_terms))
-    
-    logger.info("Successfully loaded %d brevity terms (full resync).", len(new_terms))
-    return len(new_terms), len(new_terms), 0  # all new terms
+
+    logger.info(
+        "Successfully loaded %d brevity terms. Added: %d, Updated: %d, Unchanged: %d.",
+        len(new_terms), len(added_terms), len(updated_terms), len(unchanged_terms)
+    )
+
+    return len(new_terms), len(added_terms), len(updated_terms)
 
 def get_all_terms():
     terms_data = r.get(TERMS_KEY)
