@@ -243,7 +243,14 @@ def update_brevity_terms():
 
 def get_all_terms():
     terms_data = r.get(TERMS_KEY)
-    return json.loads(terms_data) if terms_data else []
+    if not terms_data:
+        return []
+
+    try:
+        return json.loads(terms_data)
+    except json.JSONDecodeError as e:
+        logger.error("Failed to decode terms data from Redis: %s", e)
+        return []
 
 def get_next_brevity_term(guild_id):
     all_terms = get_all_terms()
@@ -317,7 +324,7 @@ async def reloadterms(interaction: discord.Interaction):
 
     total, added, updated = update_brevity_terms()
     await interaction.followup.send(
-        f"Terms synced from Wiki. Total: {total}. New added: {added}. Existing updated: {updated}.", ephemeral=True
+        f"Terms synced from Wiki. Added: {added}. Updated: {updated}. Total: {total}.", ephemeral=True
     )
     logger.info("Manual reload triggered by guild %s", interaction.guild.id)
 
