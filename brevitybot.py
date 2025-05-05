@@ -374,17 +374,26 @@ async def post_brevity_term():
             guild_id = int(guild_id_str)
             if not is_posting_enabled(guild_id):
                 continue
+
             freq_hours = get_post_frequency(guild_id)
-            if time.time() - get_last_posted(guild_id) < freq_hours * 3600:
+            last_posted = get_last_posted(guild_id)
+            next_post_time = last_posted + (freq_hours * 3600)
+
+            # Check if it's time to post (allowing a ±5-minute window)
+            current_time = time.time()
+            if current_time < next_post_time - 300 or current_time > next_post_time + 300:
                 continue
+
             channel = client.get_channel(config["channel_id"])
             if not channel:
                 logger.warning("Channel %s not found for guild %s. Removing stale config.", config['channel_id'], guild_id)
                 r.hdel(CHANNEL_MAP_KEY, str(guild_id))
                 continue
+
             term = get_next_brevity_term(guild_id)
             if not term:
                 continue
+
             embed = discord.Embed(
                 title=term['term'],
                 description=term['definition'],
@@ -395,15 +404,13 @@ async def post_brevity_term():
             if image_url:
                 embed.set_image(url=image_url)
             embed.set_footer(text="From Wikipedia – Multi-service Tactical Brevity Code")
+
             await channel.send(embed=embed)
-            set_last_posted(guild_id, time.time())
+            set_last_posted(guild_id, next_post_time)  # Set the next post time based on the fixed schedule
             logger.info("Posted term '%s' to guild %s (#%s)", term['term'], guild_id, config["channel_id"])
 
         except Exception as e:
             logger.error("Failed to post to guild %s: %s", guild_id_str, e)
-
-
-
 
 
 @tasks.loop(hours=24)
