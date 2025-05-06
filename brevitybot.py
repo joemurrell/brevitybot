@@ -70,7 +70,7 @@ tree = app_commands.CommandTree(client)
 def clean_term(term):
     # Retain square brackets for terms but remove them for definitions
     cleaned = term.replace("*", "").strip()
-    return cleaned.upper()
+    return cleaned
 
 def load_used_terms(guild_id):
     return list(r.smembers(f"used_terms:{guild_id}"))
@@ -166,7 +166,7 @@ def parse_brevity_terms():
         nonlocal current_term, current_definition_parts
         if current_term and current_definition_parts:
             definition = "\n".join(current_definition_parts).strip()
-            cleaned_term = re.sub(r"\s*\[.*?\]", "", current_term).replace("*", "").strip().upper()
+            cleaned_term = clean_term(current_term)  # Use the updated clean_term function
             terms.append({
                 "term": cleaned_term,
                 "definition": definition
