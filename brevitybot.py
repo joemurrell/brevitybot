@@ -68,8 +68,8 @@ tree = app_commands.CommandTree(client)
 # UTILITIES
 # -------------------------------
 def clean_term(term):
-    cleaned = re.sub(r"\s*\[.*?\]", "", term)
-    cleaned = cleaned.replace("*", "").strip()
+    # Retain square brackets for terms but remove them for definitions
+    cleaned = term.replace("*", "").strip()
     return cleaned.upper()
 
 def load_used_terms(guild_id):
