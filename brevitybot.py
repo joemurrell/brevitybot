@@ -330,10 +330,18 @@ async def reloadterms(interaction: discord.Interaction):
 
 
 async def autocomplete_terms(interaction: discord.Interaction, current: str):
-    return [
-        app_commands.Choice(name=term["term"], value=term["term"])
-        for term in get_all_terms() if current.lower() in term["term"].lower()
-    ][:25]  # Limit the number of choices to 25
+    all_terms = get_all_terms()
+    if current.strip():
+        # Filter terms based on user input
+        filtered_terms = [
+            app_commands.Choice(name=term["term"], value=term["term"])
+            for term in all_terms if current.lower() in term["term"].lower()
+        ]
+        return filtered_terms[:25]  # Limit to 25 choices
+    else:
+        # Return a random set of 25 terms if no input is provided
+        random_terms = random.sample(all_terms, min(25, len(all_terms)))
+        return [app_commands.Choice(name=term["term"], value=term["term"]) for term in random_terms]
 
 @tree.command(name="define", description="Look up the definition of a brevity term.")
 @app_commands.describe(term="The brevity term to define")
