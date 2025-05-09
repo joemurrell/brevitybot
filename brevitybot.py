@@ -331,6 +331,10 @@ async def reloadterms(interaction: discord.Interaction):
 
 @tree.command(name="define", description="Look up the definition of a brevity term.")
 @app_commands.describe(term="The brevity term to define")
+@app_commands.autocomplete(term=lambda interaction, current: [
+    app_commands.Choice(name=term["term"], value=term["term"])
+    for term in get_all_terms() if current.lower() in term["term"].lower()
+])
 async def define(interaction: discord.Interaction, term: str):
     entry = get_brevity_term_by_name(term)
     if not entry:
