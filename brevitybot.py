@@ -333,7 +333,7 @@ async def autocomplete_terms(interaction: discord.Interaction, current: str):
     return [
         app_commands.Choice(name=term["term"], value=term["term"])
         for term in get_all_terms() if current.lower() in term["term"].lower()
-    ]
+    ][:25]  # Limit the number of choices to 25
 
 @tree.command(name="define", description="Look up the definition of a brevity term.")
 @app_commands.describe(term="The brevity term to define")
