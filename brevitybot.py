@@ -16,9 +16,10 @@ import time
 # -------------------------------
 # LOGGING
 # -------------------------------
-#logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(message)s')
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+# Adjust logging level to DEBUG for less critical logs
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("brevitybot")
+logger.setLevel(logging.DEBUG)  # Set the logger to DEBUG level
 
 # -------------------------------
 # ENVIRONMENT VARIABLES
