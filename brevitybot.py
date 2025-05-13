@@ -236,7 +236,7 @@ def update_brevity_terms():
 
     logger.info(
         "Successfully loaded %d brevity terms. Added: %d, Updated: %d, Unchanged: %d.",
-        len(new_terms), len(added_terms), len(updated_terms), len(unchanged_terms)
+        len(new_terms), len(added_terms), len(updated_terms)
     )
 
     return len(new_terms), len(added_terms), len(updated_terms)
@@ -432,6 +432,21 @@ async def post_brevity_term():
 async def refresh_terms_daily():
     update_brevity_terms()
 
+@tasks.loop(hours=1)
+async def log_bot_stats():
+    num_servers = len(client.guilds)
+    total_words = int(r.get("total_words") or 0)
+    command_usage = json.loads(r.get("command_usage") or "{}")
+
+    # Format command usage stats
+    command_usage_stats = ", ".join([f"{cmd}: {count}" for cmd, count in command_usage.items()])
+
+    # Log the stats to the console
+    logger.info(
+        "BrevityBot Statistics: Servers: %d, Words sent per day: %d, Slash command usage: %s",
+        num_servers, total_words, command_usage_stats
+    )
+
 # -------------------------------
 # BOT READY EVENT
 # -------------------------------
@@ -443,6 +458,8 @@ async def on_ready():
         post_brevity_term.start()
     if not refresh_terms_daily.is_running():
         refresh_terms_daily.start()
+    if not log_bot_stats.is_running():
+        log_bot_stats.start()
 
 
 if __name__ == "__main__":
