@@ -236,7 +236,7 @@ def update_brevity_terms():
 
     logger.info(
         "Successfully loaded %d brevity terms. Added: %d, Updated: %d, Unchanged: %d.",
-        len(new_terms), len(added_terms), len(updated_terms)
+        len(new_terms), len(added_terms), len(updated_terms), len(unchanged_terms)
     )
 
     return len(new_terms), len(added_terms), len(updated_terms)
