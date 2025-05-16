@@ -12,14 +12,26 @@ import json
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 import time
+import sys
 
 # -------------------------------
 # LOGGING
 # -------------------------------
-# Adjust logging level to DEBUG for less critical logs
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(message)s')
+# Set up two handlers: one for stdout (DEBUG/INFO), one for stderr (WARNING+)
+stdout_handler = logging.StreamHandler(sys.stdout)
+stdout_handler.setLevel(logging.DEBUG)
+stdout_handler.addFilter(lambda record: record.levelno < logging.WARNING)
+
+stderr_handler = logging.StreamHandler(sys.stderr)
+stderr_handler.setLevel(logging.WARNING)
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[stdout_handler, stderr_handler]
+)
+
 logger = logging.getLogger("brevitybot")
-logger.setLevel(logging.DEBUG)  # Set the logger to DEBUG level
 
 # -------------------------------
 # ENVIRONMENT VARIABLES
