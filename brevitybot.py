@@ -17,21 +17,36 @@ import sys
 # -------------------------------
 # LOGGING
 # -------------------------------
-# Set up two handlers: one for stdout (DEBUG/INFO), one for stderr (WARNING+)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+class MaxLevelFilter(logging.Filter):
+    def __init__(self, level):
+        self.level = level
+    def filter(self, record):
+        return record.levelno <= self.level
+
+# Formatter for consistent, readable logs
+log_format = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+
 stdout_handler = logging.StreamHandler(sys.stdout)
-stdout_handler.setLevel(logging.DEBUG)
-stdout_handler.addFilter(lambda record: record.levelno < logging.WARNING)
+stdout_handler.setLevel(logging.INFO)
+stdout_handler.addFilter(MaxLevelFilter(logging.INFO))
+stdout_handler.setFormatter(logging.Formatter(log_format))
 
 stderr_handler = logging.StreamHandler(sys.stderr)
 stderr_handler.setLevel(logging.WARNING)
+stderr_handler.setFormatter(logging.Formatter(log_format))
 
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[stdout_handler, stderr_handler]
+    level=LOG_LEVEL,
+    handlers=[stdout_handler, stderr_handler],
+    force=True  # Overwrite any prior config
 )
 
 logger = logging.getLogger("brevitybot")
+logger.setLevel(LOG_LEVEL)
+
+# To enable debug logs, set LOG_LEVEL=DEBUG in your environment.
 
 # -------------------------------
 # ENVIRONMENT VARIABLES
