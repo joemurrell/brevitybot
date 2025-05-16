@@ -26,7 +26,7 @@ class MaxLevelFilter(logging.Filter):
         return record.levelno <= self.level
 
 # Formatter for consistent, readable logs
-log_format = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+log_format = "%(message)s"
 
 stdout_handler = logging.StreamHandler(sys.stdout)
 stdout_handler.setLevel(logging.INFO)
