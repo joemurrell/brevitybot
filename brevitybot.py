@@ -450,34 +450,35 @@ async def quiz(interaction: discord.Interaction, questions: int = 1):
             title=f"Question {q_idx+1}/{questions}: What is the correct definition for: {correct_term}?",
             color=discord.Color.orange()
         )
+        option_labels = ["A", "B", "C", "D"]
         for idx, opt in enumerate(options):
-            embed.add_field(name=f"Option {idx+1}", value=opt["definition"], inline=False)
+            embed.add_field(name=f"{option_labels[idx]}", value=opt["definition"], inline=False)
         class QuizView(discord.ui.View):
             def __init__(self, options):
                 super().__init__(timeout=60)
                 self.options = options
-            @discord.ui.button(label="1", style=discord.ButtonStyle.primary)
-            async def option1(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+            @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
+            async def optionA(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
                 await self.handle_answer(interaction_btn, 0)
-            @discord.ui.button(label="2", style=discord.ButtonStyle.primary)
-            async def option2(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+            @discord.ui.button(label="B", style=discord.ButtonStyle.primary)
+            async def optionB(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
                 await self.handle_answer(interaction_btn, 1)
-            @discord.ui.button(label="3", style=discord.ButtonStyle.primary)
-            async def option3(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+            @discord.ui.button(label="C", style=discord.ButtonStyle.primary)
+            async def optionC(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
                 await self.handle_answer(interaction_btn, 2)
-            @discord.ui.button(label="4", style=discord.ButtonStyle.primary)
-            async def option4(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+            @discord.ui.button(label="D", style=discord.ButtonStyle.primary)
+            async def optionD(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
                 await self.handle_answer(interaction_btn, 3)
             async def handle_answer(self, interaction_btn, idx):
                 if interaction_btn.user.id != interaction.user.id:
                     await interaction_btn.response.send_message("This quiz is not for you!", ephemeral=True)
                     return
                 if self.options[idx]["is_correct"]:
-                    msg = f"✅ Correct! {self.options[idx]['definition']}"
+                    msg = f"✅ Correct! {option_labels[idx]}. {self.options[idx]['definition']}"
                     score["correct"] += 1
                 else:
                     correct_idx = next(i for i, o in enumerate(self.options) if o["is_correct"])
-                    msg = f"❌ Incorrect. The correct answer was Option {correct_idx+1}: {self.options[correct_idx]['definition']}"
+                    msg = f"❌ Incorrect. The correct answer was {option_labels[correct_idx]}: {self.options[correct_idx]['definition']}"
                 await interaction_btn.response.send_message(msg, ephemeral=True)
                 self.stop()
                 # Ask next question or finish
