@@ -406,6 +406,90 @@ async def enableposting(interaction: discord.Interaction):
     enable_posting(interaction.guild.id)
     await interaction.response.send_message("Scheduled posting enabled.", ephemeral=True)
 
+@tree.command(name="quiz", description="Start a multiple-choice quiz on brevity terms")
+@app_commands.describe(questions="Number of questions to answer")
+async def quiz(interaction: discord.Interaction, questions: int = 1):
+    all_terms = get_all_terms()
+    max_questions = len(all_terms)
+    if max_questions < 4:
+        await interaction.response.send_message("Not enough terms to generate a quiz.", ephemeral=True)
+        return
+    if questions < 1 or questions > max_questions:
+        await interaction.response.send_message(f"Number of questions must be between 1 and {max_questions}.", ephemeral=True)
+        return
+
+    # Shuffle and pick unique terms for questions
+    quiz_terms = random.sample(all_terms, questions)
+    score = {"correct": 0, "total": questions}
+
+    async def ask_question(q_idx):
+        current = quiz_terms[q_idx]
+        correct_term = current["term"]
+        def pick_single_definition(defn):
+            defn = defn.strip()
+            if re.match(r"^1\. ", defn):
+                parts = re.split(r"\d+\. ", defn)
+                for part in parts:
+                    if part.strip():
+                        return part.strip()
+            for line in defn.split("\n"):
+                if line.strip():
+                    return line.strip()
+            return defn
+        correct_def = pick_single_definition(current["definition"])
+        # Pick 3 incorrect answers
+        incorrect_terms = [t for t in all_terms if t["term"] != correct_term]
+        incorrect_choices = random.sample(incorrect_terms, 3)
+        options = []
+        for t in incorrect_choices:
+            d = pick_single_definition(t["definition"])
+            options.append({"term": t["term"], "definition": d, "is_correct": False})
+        options.append({"term": correct_term, "definition": correct_def, "is_correct": True})
+        random.shuffle(options)
+        embed = discord.Embed(
+            title=f"Question {q_idx+1}/{questions}: What is the correct definition for: {correct_term}?",
+            color=discord.Color.orange()
+        )
+        for idx, opt in enumerate(options):
+            embed.add_field(name=f"Option {idx+1}", value=opt["definition"], inline=False)
+        class QuizView(discord.ui.View):
+            def __init__(self, options):
+                super().__init__(timeout=60)
+                self.options = options
+            @discord.ui.button(label="1", style=discord.ButtonStyle.primary)
+            async def option1(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+                await self.handle_answer(interaction_btn, 0)
+            @discord.ui.button(label="2", style=discord.ButtonStyle.primary)
+            async def option2(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+                await self.handle_answer(interaction_btn, 1)
+            @discord.ui.button(label="3", style=discord.ButtonStyle.primary)
+            async def option3(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+                await self.handle_answer(interaction_btn, 2)
+            @discord.ui.button(label="4", style=discord.ButtonStyle.primary)
+            async def option4(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+                await self.handle_answer(interaction_btn, 3)
+            async def handle_answer(self, interaction_btn, idx):
+                if interaction_btn.user.id != interaction.user.id:
+                    await interaction_btn.response.send_message("This quiz is not for you!", ephemeral=True)
+                    return
+                if self.options[idx]["is_correct"]:
+                    msg = f"✅ Correct! {self.options[idx]['definition']}"
+                    score["correct"] += 1
+                else:
+                    correct_idx = next(i for i, o in enumerate(self.options) if o["is_correct"])
+                    msg = f"❌ Incorrect. The correct answer was Option {correct_idx+1}: {self.options[correct_idx]['definition']}"
+                await interaction_btn.response.send_message(msg, ephemeral=True)
+                self.stop()
+                # Ask next question or finish
+                if q_idx + 1 < questions:
+                    await ask_question(q_idx + 1)
+                else:
+                    await interaction.followup.send(f"Quiz complete! You got {score['correct']} out of {score['total']} correct.", ephemeral=True)
+        if q_idx == 0:
+            await interaction.response.send_message(embed=embed, view=QuizView(options), ephemeral=True)
+        else:
+            await interaction.followup.send(embed=embed, view=QuizView(options), ephemeral=True)
+    await ask_question(0)
 # -------------------------------
 # BACKGROUND TASKS
 # -------------------------------
