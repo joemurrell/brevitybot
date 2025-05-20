@@ -32,10 +32,22 @@ formatter = logging.Formatter(log_format)
 stdout_handler = logging.StreamHandler(sys.stdout)
 stdout_handler.setLevel(logging.INFO)
 stdout_handler.addFilter(MaxLevelFilter(logging.INFO))
-stdout_handler.setFormatter(formatter)
 
 stderr_handler = logging.StreamHandler(sys.stderr)
 stderr_handler.setLevel(logging.WARNING)
+
+class CustomFormatter(logging.Formatter):
+    def format(self, record):
+        if record.levelno <= logging.INFO:
+            # Only show message and timestamp for INFO/DEBUG
+            return f"[{self.formatTime(record)}] {record.getMessage()}"
+        else:
+            # Show full format for WARNING and above
+            return f"[{self.formatTime(record)}] [{record.levelname:<8}] {record.name}: {record.getMessage()}"
+
+formatter = CustomFormatter()
+
+stdout_handler.setFormatter(formatter)
 stderr_handler.setFormatter(formatter)
 
 # Remove all handlers from root logger and discord logger
@@ -46,6 +58,13 @@ for logger_name in (None, "discord", "brevitybot"):
     log.propagate = False
     log.addHandler(stdout_handler)
     log.addHandler(stderr_handler)
+
+# Suppress discord.client warnings (e.g., PyNaCl not installed)
+discord_client_logger = logging.getLogger("discord.client")
+discord_client_logger.setLevel(logging.ERROR)
+discord_client_logger.handlers.clear()
+discord_client_logger.addHandler(stdout_handler)
+discord_client_logger.addHandler(stderr_handler)
 
 logger = logging.getLogger("brevitybot")
 logger.setLevel(LOG_LEVEL)
