@@ -71,6 +71,11 @@ logger.setLevel(LOG_LEVEL)
 
 # To enable debug logs, set LOG_LEVEL=DEBUG in your environment.
 
+# After setting up handlers, print all handlers for debugging
+for logger_name in (None, "discord", "brevitybot", "discord.client"):
+    log = logging.getLogger(logger_name)
+    logger.info(f"Logger '{logger_name}': handlers: {log.handlers}")
+
 # -------------------------------
 # ENVIRONMENT VARIABLES
 # -------------------------------
