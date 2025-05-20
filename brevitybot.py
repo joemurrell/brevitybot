@@ -62,6 +62,14 @@ discord_client_logger.handlers.clear()
 discord_client_logger.addHandler(stdout_handler)
 discord_client_logger.addHandler(stderr_handler)
 
+# Remove all handlers from discord.gateway and set formatter (to catch any direct logging)
+discord_gateway_logger = logging.getLogger("discord.gateway")
+discord_gateway_logger.handlers.clear()
+discord_gateway_logger.setLevel(LOG_LEVEL)
+discord_gateway_logger.propagate = False
+discord_gateway_logger.addHandler(stdout_handler)
+discord_gateway_logger.addHandler(stderr_handler)
+
 logger = logging.getLogger("brevitybot")
 logger.setLevel(LOG_LEVEL)
 
