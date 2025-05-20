@@ -26,22 +26,26 @@ class MaxLevelFilter(logging.Filter):
         return record.levelno <= self.level
 
 # Formatter for consistent, readable logs
-log_format = "%(message)s"
+log_format = "[%(asctime)s] [%(levelname)-8s] %(name)s: %(message)s"
+formatter = logging.Formatter(log_format)
 
 stdout_handler = logging.StreamHandler(sys.stdout)
 stdout_handler.setLevel(logging.INFO)
 stdout_handler.addFilter(MaxLevelFilter(logging.INFO))
-stdout_handler.setFormatter(logging.Formatter(log_format))
+stdout_handler.setFormatter(formatter)
 
 stderr_handler = logging.StreamHandler(sys.stderr)
 stderr_handler.setLevel(logging.WARNING)
-stderr_handler.setFormatter(logging.Formatter(log_format))
+stderr_handler.setFormatter(formatter)
 
-logging.basicConfig(
-    level=LOG_LEVEL,
-    handlers=[stdout_handler, stderr_handler],
-    force=True  # Overwrite any prior config
-)
+# Remove all handlers from root logger and discord logger
+for logger_name in (None, "discord", "brevitybot"):
+    log = logging.getLogger(logger_name)
+    log.handlers.clear()
+    log.setLevel(LOG_LEVEL)
+    log.propagate = False
+    log.addHandler(stdout_handler)
+    log.addHandler(stderr_handler)
 
 logger = logging.getLogger("brevitybot")
 logger.setLevel(LOG_LEVEL)
