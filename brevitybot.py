@@ -47,6 +47,13 @@ for logger_name in (None, "discord", "brevitybot"):
     log.addHandler(stdout_handler)
     log.addHandler(stderr_handler)
 
+# Suppress discord.client warnings (e.g., PyNaCl not installed)
+discord_client_logger = logging.getLogger("discord.client")
+discord_client_logger.setLevel(logging.ERROR)
+discord_client_logger.handlers.clear()
+discord_client_logger.addHandler(stdout_handler)
+discord_client_logger.addHandler(stderr_handler)
+
 logger = logging.getLogger("brevitybot")
 logger.setLevel(LOG_LEVEL)
 
