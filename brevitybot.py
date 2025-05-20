@@ -38,12 +38,8 @@ stderr_handler.setLevel(logging.WARNING)
 
 class CustomFormatter(logging.Formatter):
     def format(self, record):
-        if record.levelno <= logging.INFO:
-            # Only show message and timestamp for INFO/DEBUG
-            return f"[{self.formatTime(record)}] {record.getMessage()}"
-        else:
-            # Show full format for WARNING and above
-            return f"[{self.formatTime(record)}] [{record.levelname:<8}] {record.name}: {record.getMessage()}"
+        # For Railway, remove all [LEVEL] tags and timestamps from all logs
+        return f"{record.getMessage()}"
 
 formatter = CustomFormatter()
 
