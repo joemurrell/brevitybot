@@ -566,7 +566,9 @@ async def post_brevity_term():
             embed.set_footer(text="From Wikipedia – Multi-service Tactical Brevity Code")
 
             await channel.send(embed=embed)
-            set_last_posted(guild_id, next_post_time)  # Set the next post time based on the fixed schedule
+            # Record the actual post time so future scheduling is based on when
+            # the term was sent, not when it was supposed to be sent.
+            set_last_posted(guild_id, time.time())
             logger.info("Posted term '%s' to guild %s (#%s)", term['term'], guild_id, config["channel_id"])
 
         except Exception as e:
