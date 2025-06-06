@@ -8,7 +8,7 @@
 - `/nextterm` — Manually post the next brevity term
 - `/define <term>` — Look up a term's definition without marking it as used
 - `/reloadterms` — Refresh the term list from Wikipedia
-- `/setfrequency <1-24>` — Set posting frequency per server (in hours)
+- `/setfrequency <hours>` — Set posting frequency per server in hours (any positive number, default 24 if not set)
 - `/enableposting` — Enable automatic daily posting of brevity terms in the current channel.
 - `/disableposting` — Disable automatic daily posting of brevity terms in the current channel.
 
