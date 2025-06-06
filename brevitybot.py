@@ -14,6 +14,9 @@ from urllib.parse import urlparse
 import time
 import sys
 
+# Load environment variables from a .env file before anything else
+load_dotenv()
+
 # -------------------------------
 # LOGGING
 # -------------------------------
@@ -83,7 +86,8 @@ for logger_name in (None, "discord", "brevitybot", "discord.client"):
 # -------------------------------
 # ENVIRONMENT VARIABLES
 # -------------------------------
-load_dotenv()
+# load_dotenv() was called at import time to ensure LOG_LEVEL and other
+# settings are available before configuration
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 FLICKR_API_KEY = os.getenv("FLICKR_API_KEY")
