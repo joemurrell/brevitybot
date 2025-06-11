@@ -11,6 +11,7 @@
 - `/setfrequency <hours>` — Set posting frequency per server in hours (any positive number, default 24 if not set)
 - `/enableposting` — Enable automatic daily posting of brevity terms in the current channel.
 - `/disableposting` — Disable automatic daily posting of brevity terms in the current channel.
+- `/quiz` — Take a multiple choice quiz to test your knowledge of brevity terms.
 
 ## How It Works
 
