@@ -15,5 +15,5 @@ redis==5.2.1
 requests==2.32.4
 soupsieve==2.6
 typing_extensions==4.13.2
-urllib3==2.4.0
+urllib3==2.5.0
 yarl==1.19.0
