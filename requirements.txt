@@ -12,7 +12,7 @@ multidict==6.4.3
 propcache==0.3.1
 python-dotenv==1.1.0
 redis==5.2.1
-requests==2.32.3
+requests==2.32.4
 soupsieve==2.6
 typing_extensions==4.13.2
 urllib3==2.4.0

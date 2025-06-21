@@ -14,6 +14,9 @@ from urllib.parse import urlparse
 import time
 import sys
 
+# Load environment variables from a .env file before anything else
+load_dotenv()
+
 # -------------------------------
 # LOGGING
 # -------------------------------
@@ -83,7 +86,8 @@ for logger_name in (None, "discord", "brevitybot", "discord.client"):
 # -------------------------------
 # ENVIRONMENT VARIABLES
 # -------------------------------
-load_dotenv()
+# load_dotenv() was called at import time to ensure LOG_LEVEL and other
+# settings are available before configuration
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 FLICKR_API_KEY = os.getenv("FLICKR_API_KEY")
@@ -566,7 +570,9 @@ async def post_brevity_term():
             embed.set_footer(text="From Wikipedia – Multi-service Tactical Brevity Code")
 
             await channel.send(embed=embed)
-            set_last_posted(guild_id, next_post_time)  # Set the next post time based on the fixed schedule
+            # Record the actual post time so future scheduling is based on when
+            # the term was sent, not when it was supposed to be sent.
+            set_last_posted(guild_id, time.time())
             logger.info("Posted term '%s' to guild %s (#%s)", term['term'], guild_id, config["channel_id"])
 
         except Exception as e:
