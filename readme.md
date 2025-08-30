@@ -14,8 +14,8 @@
 - `/quiz` — Take a multiple choice quiz in a channel with friends or by yourself to test your knowledge of brevity terms.
 - `/greenieboard` — Shows each user's last 10 quiz results as a greenie board-esque timeline with average score.
 
-## Don't want to self-host? Easily invite an existing bot to your Discord server
-https://discord.com/oauth2/authorize?client_id=1359029668547924098
+## Don't want to self-host? 
+Easily invite an existing bot to your Discord server: https://discord.com/oauth2/authorize?client_id=1359029668547924098
 
 ## How It Works
 
