@@ -237,14 +237,19 @@ def sanitize_definition_for_quiz(defn: str, term: str, min_len: int = 15) -> str
 
     s = re.sub(rf'\b{re.escape(term)}\b', _mask, s, flags=re.IGNORECASE)
 
-    # Collapse accidental double-spaces from removals
-    # Preserve a single space before the mask if the term had leading whitespace
+    # Collapse accidental double-spaces from removals (trim edges but keep internal spacing)
     s = re.sub(r'\s{2,}', ' ', s).strip()
 
-    # If any existing short underscore masks (e.g. '_', '__', etc.) remain from
-    # previous processing or raw data, normalize them to at least 6 underscores so
-    # they don't reveal length clues and are visually consistent.
-    s = re.sub(r'(?<!_)_{1,5}(?!_)', '______', s)
+    # Normalize any underscore runs to a visible, non-revealing mask.
+    # Ensure masks are at least 6 underscores and prefix them with two spaces so
+    # they stand out visually (e.g. '  ______'). This catches both newly-created
+    # masks and any short underscore runs from source data.
+    def _normalize_underscores(match):
+        run = match.group(0)
+        length = max(6, len(run))
+        return '  ' + ('_' * length)
+
+    s = re.sub(r'_{1,}', _normalize_underscores, s)
 
     # If the result is too short, try removing sentences that contain the term
     if len(s) < min_len:
@@ -256,7 +261,9 @@ def sanitize_definition_for_quiz(defn: str, term: str, min_len: int = 15) -> str
             return candidate
         # Fallback: return the first sentence with the term masked
         first = parts[0] if parts else defn
-        first = re.sub(rf'\b{re.escape(term)}\b', lambda m: '_' * len(m.group(0)), first, flags=re.IGNORECASE).strip()
+        # Mask occurrences in the fallback first sentence then normalize underscore masks
+        first = re.sub(rf'\b{re.escape(term)}\b', lambda m: '_' * max(6, len(m.group(0))), first, flags=re.IGNORECASE).strip()
+        first = re.sub(r'_{1,}', _normalize_underscores, first)
         return first if len(first) >= 5 else '[definition omitted for quiz]'
 
     return s
