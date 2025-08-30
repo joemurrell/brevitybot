@@ -766,23 +766,7 @@ async def quiz(
         await interaction.response.send_message("Couldn't determine the channel to post the quiz in. Please run this command in a server text channel.", ephemeral=True)
         return
 
-    # Find bot member for permission checks
-    bot_member = None
-    try:
-        bot_member = interaction.guild.get_member(client.user.id) if interaction.guild else None
-    except Exception:
-        bot_member = None
-
-    try:
-        perms = channel.permissions_for(bot_member) if bot_member and hasattr(channel, 'permissions_for') else None
-    except Exception:
-        perms = None
-
-    logger.debug("Posting quiz: guild=%s channel=%s bot_member=%s perms=%s", interaction.guild_id, getattr(channel, 'id', None), getattr(bot_member, 'id', None) if bot_member else None, perms)
-    if perms and not perms.send_messages:
-        logger.error("Bot missing send_messages permission in channel %s for guild %s", channel.id, interaction.guild_id)
-        await interaction.response.send_message("I don't have permission to post in that channel (missing Send Messages). Please check my role and channel permissions.", ephemeral=True)
-        return
+    # We'll attempt to announce and post followups; rely on try/except to surface permission errors
 
     # Announce the quiz first via the interaction response (so followups are allowed)
     minute_label = "minute" if duration == 1 else "minutes"
@@ -819,6 +803,11 @@ async def quiz(
         except Exception as e:
             # Log full context for diagnosis and return a helpful ephemeral message to the user
             try:
+                # Resolve bot_member lazily in case it wasn't defined earlier
+                try:
+                    bot_member = interaction.guild.get_member(client.user.id) if interaction.guild else None
+                except Exception:
+                    bot_member = None
                 channel_perms = channel.permissions_for(bot_member) if bot_member and hasattr(channel, 'permissions_for') else None
             except Exception:
                 channel_perms = None
