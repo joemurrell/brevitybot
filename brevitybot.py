@@ -784,9 +784,38 @@ async def quiz(
         await interaction.response.send_message("I don't have permission to post in that channel (missing Send Messages). Please check my role and channel permissions.", ephemeral=True)
         return
 
+    # Announce the quiz first via the interaction response (so followups are allowed)
+    minute_label = "minute" if duration == 1 else "minutes"
+    question_label = "question" if questions == 1 else "questions"
+    start_embed = discord.Embed(
+        title="Brevity quiz started!",
+        description=f"You have **{duration}** {minute_label} to answer **{questions}** {question_label}.",
+        color=discord.Color.orange()
+    )
+    start_embed.add_field(name="Duration", value=f"{duration} {minute_label}", inline=True)
+    start_embed.add_field(name="Questions", value=f"{questions} {question_label}", inline=True)
+    try:
+        start_embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+    except Exception:
+        start_embed.set_author(name=interaction.user.display_name)
+    start_embed.set_footer(text=f"Quiz initiated by {interaction.user.display_name}")
+
+    # Send the start embed as the interaction response so we can post followups
+    try:
+        await interaction.response.send_message(embed=start_embed, ephemeral=False)
+    except Exception as e:
+        logger.error("Failed to send start embed response: %s", e)
+        # Fall back to attempting to send as a followup (if response used elsewhere)
+        try:
+            await interaction.followup.send(embed=start_embed, ephemeral=False)
+        except Exception as e2:
+            logger.error("Also failed to send start embed as followup: %s", e2)
+            await interaction.response.send_message("Couldn't announce the quiz; check my permissions.", ephemeral=True)
+            return
+
     for embed, view in zip(embeds, views):
         try:
-            msg = await channel.send(embed=embed, view=view)
+            msg = await interaction.followup.send(embed=embed, view=view)
         except Exception as e:
             # Log full context for diagnosis and return a helpful ephemeral message to the user
             try:
@@ -827,10 +856,10 @@ async def quiz(
             except Exception:
                 logger.error("Also failed to send ephemeral response to the user about missing access.")
             return
-        view.message = msg
-        view.message_id = msg.id
-        messages.append(msg)
-        logger.info(f"Posted quiz message id={msg.id} quiz_id={quiz_id} q_index={view.question_idx}")
+    view.message = msg
+    view.message_id = msg.id
+    messages.append(msg)
+    logger.info(f"Posted quiz message id={msg.id} quiz_id={quiz_id} q_index={view.question_idx}")
 
     # Announce the quiz as a polished embed instead of a plain message
     minute_label = "minute" if duration == 1 else "minutes"
@@ -956,6 +985,50 @@ async def greenieboard(interaction: discord.Interaction):
     # Send as a code block for fixed-width alignment
     board_code = "```" + "\n" + board + "```"
     await interaction.response.send_message(board_code, ephemeral=False)
+
+
+@tree.command(name="checkperms", description="Show the bot's effective permissions in this channel")
+async def checkperms(interaction: discord.Interaction):
+    channel = interaction.channel
+    if not channel:
+        await interaction.response.send_message("This command must be used in a guild text channel.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    bot_member = guild.get_member(client.user.id) if guild else None
+    if not bot_member:
+        await interaction.response.send_message("I don't appear to be a member of this guild (unexpected).", ephemeral=True)
+        return
+
+    perms = channel.permissions_for(bot_member)
+
+    required = {
+        "view_channel": "View Channels",
+        "send_messages": "Send Messages",
+        "embed_links": "Embed Links",
+        "read_message_history": "Read Message History",
+    }
+
+    missing = [name for attr, name in required.items() if not getattr(perms, attr, False)]
+
+    embed = discord.Embed(title="Bot Permissions — Channel Diagnostic", color=discord.Color.blue())
+    embed.add_field(name="Channel", value=f"<#{channel.id}>", inline=False)
+    perm_lines = []
+    for attr, name in required.items():
+        ok = getattr(perms, attr, False)
+        check = "✅" if ok else "❌"
+        perm_lines.append(f"{check} {name}")
+    embed.add_field(name="Required permissions", value="\n".join(perm_lines), inline=False)
+
+    if missing:
+        embed.color = discord.Color.red()
+        embed.add_field(name="Missing", value=", ".join(missing), inline=False)
+        embed.set_footer(text="Grant the bot View Channels + Send Messages (and Embed Links) or adjust channel overrides.")
+    else:
+        embed.color = discord.Color.green()
+        embed.set_footer(text="All required permissions appear present for this channel.")
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # -------------------------------
 # BACKGROUND TASKS
