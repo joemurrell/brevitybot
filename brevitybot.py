@@ -832,7 +832,16 @@ async def quiz(
         messages.append(msg)
         logger.info(f"Posted quiz message id={msg.id} quiz_id={quiz_id} q_index={view.question_idx}")
 
-    await interaction.response.send_message(f"**Brevity quiz started!** You have {duration} minute(s) to answer {questions} question(s).", ephemeral=False)
+    # Announce the quiz as a polished embed instead of a plain message
+    minute_label = "minute" if duration == 1 else "minutes"
+    question_label = "question" if questions == 1 else "questions"
+    start_embed = discord.Embed(
+        title="Brevity quiz started!",
+        description=f"You have **{duration}** {minute_label} to answer **{questions}** {question_label}.",
+        color=discord.Color.orange()
+    )
+    start_embed.set_footer(text=f"Quiz initiated by {interaction.user.display_name}")
+    await interaction.response.send_message(embed=start_embed, ephemeral=False)
 
     # Wait for the total duration, then collect and post results
     from datetime import datetime, timedelta
