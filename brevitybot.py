@@ -699,8 +699,9 @@ async def quiz(
             # Clean and keep only parts that contain letters (avoid numeric-only fragments)
             good_parts = []
             for p in parts:
-                # remove stray leading bullets or remaining digits
-                cleaned = re.sub(r"^[\s\-\(\[\)\.]*\d*[\)\.\-]*\s*", "", p).strip()
+                # remove stray leading bullets or remaining digits, but KEEP leading '[' characters
+                # (some definitions are bracketed like '[state system] ...' and the '[' is meaningful)
+                cleaned = re.sub(r"^[\s\-\(\)\.]*\d*[\)\.\-]*\s*", "", p).strip()
                 if re.search(r"[A-Za-z]", cleaned) and len(cleaned) >= 5:
                     good_parts.append(cleaned)
             if len(good_parts) > 1:
@@ -758,8 +759,74 @@ async def quiz(
         used_options.append(options)
 
     # Post all questions
+    channel = interaction.channel
+    # Defensive checks before sending to capture permission issues early
+    if channel is None:
+        logger.error("interaction.channel is None for guild=%s user=%s", interaction.guild_id, interaction.user.id)
+        await interaction.response.send_message("Couldn't determine the channel to post the quiz in. Please run this command in a server text channel.", ephemeral=True)
+        return
+
+    # Find bot member for permission checks
+    bot_member = None
+    try:
+        bot_member = interaction.guild.get_member(client.user.id) if interaction.guild else None
+    except Exception:
+        bot_member = None
+
+    try:
+        perms = channel.permissions_for(bot_member) if bot_member and hasattr(channel, 'permissions_for') else None
+    except Exception:
+        perms = None
+
+    logger.debug("Posting quiz: guild=%s channel=%s bot_member=%s perms=%s", interaction.guild_id, getattr(channel, 'id', None), getattr(bot_member, 'id', None) if bot_member else None, perms)
+    if perms and not perms.send_messages:
+        logger.error("Bot missing send_messages permission in channel %s for guild %s", channel.id, interaction.guild_id)
+        await interaction.response.send_message("I don't have permission to post in that channel (missing Send Messages). Please check my role and channel permissions.", ephemeral=True)
+        return
+
     for embed, view in zip(embeds, views):
-        msg = await interaction.channel.send(embed=embed, view=view)
+        try:
+            msg = await channel.send(embed=embed, view=view)
+        except Exception as e:
+            # Log full context for diagnosis and return a helpful ephemeral message to the user
+            try:
+                channel_perms = channel.permissions_for(bot_member) if bot_member and hasattr(channel, 'permissions_for') else None
+            except Exception:
+                channel_perms = None
+            logger.error("Failed to post quiz message to channel=%s guild=%s: %s", getattr(channel, 'id', None), interaction.guild_id, e)
+            logger.error("Channel perms for bot: %s", channel_perms)
+
+            # Detect discord Forbidden (missing access) when possible
+            is_forbidden = False
+            try:
+                import discord as _discord
+                is_forbidden = isinstance(e, _discord.Forbidden)
+            except Exception:
+                # Fallback by name if import detection fails
+                is_forbidden = e.__class__.__name__ == 'Forbidden'
+
+            if is_forbidden:
+                likely = ["View Channels", "Send Messages", "Embed Links", "Read Message History"]
+                user_msg = (
+                    f"I couldn't post the quiz in <#{getattr(channel, 'id', 'this channel')}> because I lack access. "
+                    f"Please ensure I have these permissions: {', '.join(likely)}. "
+                    "Also check channel permission overrides and that my role can view/send messages."
+                )
+            else:
+                user_msg = (
+                    "I couldn't post the quiz messages due to an unexpected error. "
+                    "Check my role and channel permissions, and see the bot logs for details."
+                )
+
+            # Try to inform the user via the interaction response or followup
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(user_msg, ephemeral=True)
+                else:
+                    await interaction.followup.send(user_msg, ephemeral=True)
+            except Exception:
+                logger.error("Also failed to send ephemeral response to the user about missing access.")
+            return
         view.message = msg
         view.message_id = msg.id
         messages.append(msg)
