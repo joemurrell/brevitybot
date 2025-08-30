@@ -11,7 +11,11 @@
 - `/setfrequency <hours>` — Set posting frequency per server in hours (any positive number, default 24 if not set)
 - `/enableposting` — Enable automatic daily posting of brevity terms in the current channel.
 - `/disableposting` — Disable automatic daily posting of brevity terms in the current channel.
-- `/quiz` — Take a multiple choice quiz to test your knowledge of brevity terms.
+- `/quiz` — Take a multiple choice quiz in a channel with friends or by yourself to test your knowledge of brevity terms.
+- `/greenieboard` — Shows each user's last 10 quiz results as a greenie board-esque timeline with average score.
+
+## Don't want to self-host? 
+Easily invite an existing bot to your Discord server: https://discord.com/oauth2/authorize?client_id=1359029668547924098
 
 ## How It Works
 
@@ -20,7 +24,7 @@
   - Last posted time per guild
   - Used term history per guild
   - Custom post frequencies
-- Optionally fetches jet images from Flickr
+- Optionally fetches militiary aviation images from Flickr
 - Posts are sent via scheduled tasks and can be triggered manually
 
 ## Requirements
