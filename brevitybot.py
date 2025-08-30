@@ -264,11 +264,24 @@ def sanitize_definition_for_quiz(defn: str, term: str, min_len: int = 15) -> str
 def parse_brevity_terms():
 
     url = "https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code"
+    # Use a polite, identifiable User-Agent. Allow override via USER_AGENT env var.
+    user_agent = os.getenv("USER_AGENT") or "BrevityBot/1.0 (+https://github.com/joemurrell/brevitybot)"
+    headers = {"User-Agent": user_agent}
     try:
-        response = requests.get(url, timeout=15)
+        response = requests.get(url, headers=headers, timeout=15)
     except Exception as e:
         logger.error("Failed to fetch brevity terms page: %s", e)
         return []
+    # If Wikipedia rejected us with 403, do a single diagnostic retry with a common browser UA
+    if getattr(response, 'status_code', None) == 403:
+        logger.warning("Received 403 fetching brevity terms with User-Agent '%s'. Trying a diagnostic retry with a browser UA.", user_agent)
+        fallback_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"}
+        try:
+            response = requests.get(url, headers=fallback_headers, timeout=15)
+            logger.debug("Retry with browser User-Agent returned status %s", getattr(response, 'status_code', 'N/A'))
+        except Exception as e:
+            logger.error("Diagnostic retry failed: %s", e)
+            return []
     # Log HTTP status and size for debugging
     try:
         content_len = len(response.content or b"")
