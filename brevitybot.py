@@ -532,19 +532,26 @@ class PublicQuizView(discord.ui.View):
 
     async def handle_vote(self, interaction, answer_idx):
         user_id = str(interaction.user.id)
-        if user_id in self.answered_users:
-            await interaction.response.send_message("You have already answered this question.", ephemeral=True)
-            return
+        # Allow users to change their vote: always write the latest selection to Redis.
+        try:
+            self.redis_conn.hset(f"quiz:{self.quiz_id}:answers:{self.question_idx}", user_id, answer_idx)
+        except Exception:
+            # Best-effort: ignore storage errors so we don't block the interaction
+            logger.exception("Failed to record vote for quiz %s q=%s user=%s", self.quiz_id, self.question_idx, user_id)
+        # Remember that this user has participated
         self.answered_users.add(user_id)
-        # Store the user's answer in Redis
-        self.redis_conn.hset(f"quiz:{self.quiz_id}:answers:{self.question_idx}", user_id, answer_idx)
         option_labels = ["A", "B", "C", "D"]
         q_number = self.question_idx + 1 if self.question_idx is not None else "?"
         selected_label = option_labels[answer_idx] if 0 <= answer_idx < len(option_labels) else str(answer_idx)
-        await interaction.response.send_message(
-            f"Q{q_number}: You selected {selected_label}",
-            ephemeral=True
-        )
+        # Acknowledge the selection. Components must respond; send an ephemeral confirmation.
+        try:
+            await interaction.response.send_message(f"Q{q_number}: You selected {selected_label}", ephemeral=True)
+        except Exception:
+            # If the component interaction was already responded to for some reason, try a followup and otherwise ignore
+            try:
+                await interaction.followup.send(f"Q{q_number}: You selected {selected_label}", ephemeral=True)
+            except Exception:
+                logger.debug("Could not acknowledge vote response for user %s (quiz %s q=%s)", user_id, self.quiz_id, self.question_idx)
 
     @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
     async def button_a(self, interaction, button): await self.handle_vote(interaction, 0)
@@ -611,12 +618,8 @@ async def quiz(
                     description=f"What is the correct definition of: **{correct_term}**",
                     color=discord.Color.orange()
                 )
-                # build description (short one-line summaries)
-                lines = []
-                for idx, opt in enumerate(options):
-                    short = textwrap.shorten(opt["definition"], width=200, placeholder="…")
-                    lines.append(f"{option_labels[idx]} {short}")
-                embed.description = embed.description + "\n".join(lines)
+                # (no short-list in description) the options are rendered as
+                # blockquote fields below so we avoid duplicating them here.
 
                 # Render each option as an empty-name field with a blockquote value so
                 # the label and definition appear on the same visible line. Use the
@@ -628,10 +631,10 @@ async def quiz(
                     display = sanitize_definition_for_quiz(raw_def, correct_term)
                     # ensure multi-line definitions stay inside the blockquote by
                     # prefixing each line with '> '
-                    display_block = "\n".join(["> " + line for line in display.splitlines()])
+                    display_block = "\n".join([" " + line for line in display.splitlines()])
                     # store display text for later reference in summaries if needed
                     opt["display"] = display
-                    embed.add_field(name="", value=f"`{option_labels[idx]}` {display_block}", inline=False)
+                    embed.add_field(name="", value=f"**`{option_labels[idx]}`** {display_block}", inline=False)
                 embed.set_footer(text=f"Question {q_idx+1} of {questions}")
                 embed.timestamp = discord.utils.utcnow()
                 class QuizView(discord.ui.View):
@@ -776,12 +779,6 @@ async def quiz(
         description=f"You have **{duration}** {minute_label} to answer **{questions}** {question_label}.",
         color=discord.Color.orange()
     )
-    start_embed.add_field(name="Duration", value=f"{duration} {minute_label}", inline=True)
-    start_embed.add_field(name="Questions", value=f"{questions} {question_label}", inline=True)
-    try:
-        start_embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-    except Exception:
-        start_embed.set_author(name=interaction.user.display_name)
     start_embed.set_footer(text=f"Quiz initiated by {interaction.user.display_name}")
 
     # Send the start embed as the interaction response so we can post followups
@@ -850,16 +847,7 @@ async def quiz(
     messages.append(msg)
     logger.info(f"Posted quiz message id={msg.id} quiz_id={quiz_id} q_index={view.question_idx}")
 
-    # Announce the quiz as a polished embed instead of a plain message
-    minute_label = "minute" if duration == 1 else "minutes"
-    question_label = "question" if questions == 1 else "questions"
-    start_embed = discord.Embed(
-        title="Brevity quiz started!",
-        description=f"You have **{duration}** {minute_label} to answer **{questions}** {question_label}.",
-        color=discord.Color.orange()
-    )
-    start_embed.set_footer(text=f"Quiz initiated by {interaction.user.display_name}")
-    await interaction.response.send_message(embed=start_embed, ephemeral=False)
+    # Start embed already sent above to allow followups; don't respond again here.
 
     # Wait for the total duration, then collect and post results
     from datetime import datetime, timedelta
@@ -885,8 +873,8 @@ async def quiz(
             opt = used_options[i][view.correct_idx]
             correct_def_short = opt["definition"]
             # Add a field per question to the results embed for clarity
-            field_name = f"`Q{i+1}:` {term}"
-            field_value = f"**`Answer:`**  **{option_labels[view.correct_idx]}** - {correct_def_short}\n **`Correct users:`** {correct_mentions}\n"
+            field_name = f"**Q{i+1}:** {term}"
+            field_value = f"**Answer:**  **`{option_labels[view.correct_idx]}`** - {correct_def_short}\n **Correct users:** {correct_mentions}\n"
             results_embed.add_field(name=field_name, value=field_value, inline=False)
 
         # Save each user's result to Redis (capped at 10)
