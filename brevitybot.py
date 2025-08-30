@@ -13,6 +13,9 @@ from dotenv import load_dotenv
 from urllib.parse import urlparse
 import time
 import sys
+from datetime import timedelta
+import asyncio
+import textwrap
 
 # Load environment variables from a .env file before anything else
 load_dotenv()
@@ -209,17 +212,80 @@ def get_random_flickr_jet(api_key):
     except Exception as e:
         logger.error("Flickr fetch error: %s", e)
         return None
+
+
+def sanitize_definition_for_quiz(defn: str, term: str, min_len: int = 15) -> str:
+    """Return a quiz-safe version of `defn` that masks literal mentions of `term`.
+    Replaces quoted examples like "GADABOUT 25" and bare occurrences of the term
+    with underscores (same length) or a short placeholder, while trying to keep
+    surrounding context. Ensures multi-line blockquote formatting is preserved by
+    returning text with original newlines intact.
+    """
+    if not defn:
+        return defn
+
+    s = defn
+    # Remove quoted examples like "GADABOUT 25" or 'GADABOUT 16-24' -> [example]
+    s = re.sub(rf'"{re.escape(term)}\s*\d+(?:-\d+)?"', '[example]', s, flags=re.IGNORECASE)
+    # Remove bare examples like GADABOUT 25 or GADABOUT 16-24
+    s = re.sub(rf'{re.escape(term)}\s*\d+(?:-\d+)?', '[example]', s, flags=re.IGNORECASE)
+
+    # Replace standalone term occurrences with same-length underscores to mask
+    def _mask(m):
+        # Prefer a 6-8 underscore mask to avoid revealing exact length but keep a visible mask
+        return '_' * max(6, min(8, len(m.group(0))))
+
+    s = re.sub(rf'\b{re.escape(term)}\b', _mask, s, flags=re.IGNORECASE)
+
+    # Collapse accidental double-spaces from removals
+    # Preserve a single space before the mask if the term had leading whitespace
+    s = re.sub(r'\s{2,}', ' ', s).strip()
+
+    # If any existing short underscore masks (e.g. '_', '__', etc.) remain from
+    # previous processing or raw data, normalize them to at least 6 underscores so
+    # they don't reveal length clues and are visually consistent.
+    s = re.sub(r'(?<!_)_{1,5}(?!_)', '______', s)
+
+    # If the result is too short, try removing sentences that contain the term
+    if len(s) < min_len:
+        parts = re.split(r'(?<=[.!?])\s+', defn)
+        kept = [p for p in parts if not re.search(rf'\b{re.escape(term)}\b', p, flags=re.IGNORECASE)]
+        candidate = ' '.join(kept).strip()
+        candidate = re.sub(r'\s{2,}', ' ', candidate)
+        if len(candidate) >= min_len:
+            return candidate
+        # Fallback: return the first sentence with the term masked
+        first = parts[0] if parts else defn
+        first = re.sub(rf'\b{re.escape(term)}\b', lambda m: '_' * len(m.group(0)), first, flags=re.IGNORECASE).strip()
+        return first if len(first) >= 5 else '[definition omitted for quiz]'
+
+    return s
     
 def parse_brevity_terms():
 
     url = "https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code"
-    response = requests.get(url)
+    try:
+        response = requests.get(url, timeout=15)
+    except Exception as e:
+        logger.error("Failed to fetch brevity terms page: %s", e)
+        return []
+    # Log HTTP status and size for debugging
+    try:
+        content_len = len(response.content or b"")
+    except Exception:
+        content_len = 0
+    logger.debug("Fetched %s (status=%s length=%s)", url, getattr(response, 'status_code', 'N/A'), content_len)
+    if getattr(response, 'status_code', 200) != 200:
+        logger.error("Non-200 response while fetching brevity terms: %s", getattr(response, 'status_code', None))
+        # still attempt to parse body if present
     soup = BeautifulSoup(response.content, "html.parser")
     content_div = soup.find("div", class_="mw-parser-output")
     terms = []
 
     if not content_div:
-        logger.warning("Couldn't find Wikipedia content container.")
+        # Dump a short snippet of the page to logs to help debugging
+        snippet = (response.text[:1000] + "...") if response is not None and response.text else ""
+        logger.error("Couldn't find Wikipedia content container. Page snippet:\n%s", snippet)
         return terms
 
     tags = list(content_div.find_all(["h2", "dt", "dd", "ul", "ol"]))
@@ -442,9 +508,52 @@ async def enableposting(interaction: discord.Interaction):
     enable_posting(interaction.guild.id)
     await interaction.response.send_message("Scheduled posting enabled.", ephemeral=True)
 
+class PublicQuizView(discord.ui.View):
+    def __init__(self, question_idx, correct_idx, quiz_id, redis_conn, timeout=None):
+        super().__init__(timeout=timeout)
+        self.question_idx = question_idx
+        self.correct_idx = correct_idx
+        self.quiz_id = quiz_id
+        self.redis_conn = redis_conn
+        self.answered_users = set()
+
+    async def handle_vote(self, interaction, answer_idx):
+        user_id = str(interaction.user.id)
+        if user_id in self.answered_users:
+            await interaction.response.send_message("You have already answered this question.", ephemeral=True)
+            return
+        self.answered_users.add(user_id)
+        # Store the user's answer in Redis
+        self.redis_conn.hset(f"quiz:{self.quiz_id}:answers:{self.question_idx}", user_id, answer_idx)
+        option_labels = ["A", "B", "C", "D"]
+        q_number = self.question_idx + 1 if self.question_idx is not None else "?"
+        selected_label = option_labels[answer_idx] if 0 <= answer_idx < len(option_labels) else str(answer_idx)
+        await interaction.response.send_message(
+            f"Q{q_number}: You selected {selected_label}",
+            ephemeral=True
+        )
+
+    @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
+    async def button_a(self, interaction, button): await self.handle_vote(interaction, 0)
+
+    @discord.ui.button(label="B", style=discord.ButtonStyle.primary)
+    async def button_b(self, interaction, button): await self.handle_vote(interaction, 1)
+
+    @discord.ui.button(label="C", style=discord.ButtonStyle.primary)
+    async def button_c(self, interaction, button): await self.handle_vote(interaction, 2)
+
+    @discord.ui.button(label="D", style=discord.ButtonStyle.primary)
+    async def button_d(self, interaction, button): await self.handle_vote(interaction, 3)
+
 @tree.command(name="quiz", description="Start a multiple-choice quiz on brevity terms")
-@app_commands.describe(questions="Number of questions to answer")
-async def quiz(interaction: discord.Interaction, questions: int = 1):
+@app_commands.describe(questions="Number of questions to answer", mode="Quiz mode: public (poll in channel) or private (ephemeral message)", duration="Total quiz duration in minutes (public mode only)")
+async def quiz(
+    interaction: discord.Interaction,
+    questions: int = 1,
+    mode: str = "private",
+    duration: int = 2
+):
+    logger.info(f"/quiz invoked by user={interaction.user.id} guild={interaction.guild_id} questions={questions} mode={mode} duration={duration}")
     all_terms = get_all_terms()
     max_questions = len(all_terms)
     if max_questions < 4:
@@ -454,26 +563,149 @@ async def quiz(interaction: discord.Interaction, questions: int = 1):
         await interaction.response.send_message(f"Number of questions must be between 1 and {max_questions}.", ephemeral=True)
         return
 
-    # Shuffle and pick unique terms for questions
     quiz_terms = random.sample(all_terms, questions)
     score = {"correct": 0, "total": questions}
 
-    async def ask_question(q_idx):
-        current = quiz_terms[q_idx]
+    if mode == "private":
+        async def ask_question(q_idx):
+            current = quiz_terms[q_idx]
+            correct_term = current["term"]
+            def pick_single_definition(defn):
+                defn = defn.strip()
+                if re.match(r"^1\\. ", defn):
+                    parts = re.split(r"\\d+\\. ", defn)
+                    for part in parts:
+                        if part.strip():
+                            return part.strip()
+                for line in defn.split("\n"):
+                    if line.strip():
+                        return line.strip()
+                return defn
+            correct_def = pick_single_definition(current["definition"])
+            incorrect_terms = [t for t in all_terms if t["term"] != correct_term]
+            incorrect_choices = random.sample(incorrect_terms, 3)
+            options = []
+            for t in incorrect_choices:
+                d = pick_single_definition(t["definition"])
+                options.append({"term": t["term"], "definition": d, "is_correct": False})
+            options.append({"term": correct_term, "definition": correct_def, "is_correct": True})
+            random.shuffle(options)
+            option_labels = ["A", "B", "C", "D"]
+            if mode == "private":
+                # Use fields for each option for better readability
+                embed = discord.Embed(
+                    title=f"Question {q_idx+1}/{questions}",
+                    description=f"What is the correct definition of: **{correct_term}**",
+                    color=discord.Color.orange()
+                )
+                # build description (short one-line summaries)
+                lines = []
+                for idx, opt in enumerate(options):
+                    short = textwrap.shorten(opt["definition"], width=200, placeholder="…")
+                    lines.append(f"{option_labels[idx]} {short}")
+                embed.description = embed.description + "\n".join(lines)
+
+                # Render each option as an empty-name field with a blockquote value so
+                # the label and definition appear on the same visible line. Use the
+                # sanitizer to mask instances of the term in the displayed text.
+                for idx, opt in enumerate(options):
+                    raw_def = opt.get("definition", "")
+                    # Only mask occurrences of the current quiz term (correct_term),
+                    # not other brevity terms that may appear in option text.
+                    display = sanitize_definition_for_quiz(raw_def, correct_term)
+                    # ensure multi-line definitions stay inside the blockquote by
+                    # prefixing each line with '> '
+                    display_block = "\n".join(["> " + line for line in display.splitlines()])
+                    # store display text for later reference in summaries if needed
+                    opt["display"] = display
+                    embed.add_field(name="", value=f"`{option_labels[idx]}` {display_block}", inline=False)
+                embed.set_footer(text=f"Question {q_idx+1} of {questions}")
+                embed.timestamp = discord.utils.utcnow()
+                class QuizView(discord.ui.View):
+                    def __init__(self, options):
+                        super().__init__(timeout=60)
+                        self.options = options
+                    @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
+                    async def optionA(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+                        await self.handle_answer(interaction_btn, 0)
+                    @discord.ui.button(label="B", style=discord.ButtonStyle.primary)
+                    async def optionB(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+                        await self.handle_answer(interaction_btn, 1)
+                    @discord.ui.button(label="C", style=discord.ButtonStyle.primary)
+                    async def optionC(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+                        await self.handle_answer(interaction_btn, 2)
+                    @discord.ui.button(label="D", style=discord.ButtonStyle.primary)
+                    async def optionD(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+                        await self.handle_answer(interaction_btn, 3)
+                    async def handle_answer(self, interaction_btn, idx):
+                        if interaction_btn.user.id != interaction.user.id:
+                            await interaction_btn.response.send_message("This quiz is not for you!", ephemeral=True)
+                            return
+                        if self.options[idx]["is_correct"]:
+                            msg = f"✅ Correct! {option_labels[idx]}. {self.options[idx]['definition']}"
+                            score["correct"] += 1
+                        else:
+                            correct_idx = next(i for i, o in enumerate(self.options) if o["is_correct"])
+                            msg = f"❌ Incorrect. The correct answer was {option_labels[correct_idx]}: {self.options[correct_idx]['definition']}"
+                        await interaction_btn.response.send_message(msg, ephemeral=True)
+                        self.stop()
+                        if q_idx + 1 < questions:
+                            await ask_question(q_idx + 1)
+                        else:
+                            await interaction.followup.send(f"Quiz complete! You got {score['correct']} out of {score['total']} correct.", ephemeral=True)
+                if q_idx == 0:
+                    await interaction.response.send_message(embed=embed, view=QuizView(options), ephemeral=True)
+                else:
+                    await interaction.followup.send(embed=embed, view=QuizView(options), ephemeral=True)
+            else:
+                await interaction.followup.send("Private quizzes are not supported in this version.", ephemeral=True)
+        await ask_question(0)
+        return
+
+    # PUBLIC MODE: post all questions at once, keep open for total duration
+    import time
+    quiz_id = f"{interaction.guild_id or 'guild'}-{interaction.user.id}-{int(time.time())}"
+    embeds = []
+    views = []
+    correct_indices = []
+    used_options = []  # store the options used for each question (so summary matches options)
+    messages = []
+    option_labels = ["A", "B", "C", "D"]
+    for q_idx, current in enumerate(quiz_terms):
         correct_term = current["term"]
         def pick_single_definition(defn):
+            """Return a single definition string.
+            If the definition contains numbered variants (e.g. "1. ... 2. ..."),
+            split them and return a randomly chosen variant. Otherwise fall back
+            to choosing a non-empty line or the whole definition.
+            """
             defn = defn.strip()
-            if re.match(r"^1\. ", defn):
-                parts = re.split(r"\d+\. ", defn)
-                for part in parts:
-                    if part.strip():
-                        return part.strip()
-            for line in defn.split("\n"):
-                if line.strip():
-                    return line.strip()
+            # Split numbered variants like '1. ... 2. ...' or '1) ... 2) ...'
+            parts = re.split(r"\d+\.\s*|\d+\)\s*", defn)
+            parts = [p.strip() for p in parts if p.strip()]
+            # Clean and keep only parts that contain letters (avoid numeric-only fragments)
+            good_parts = []
+            for p in parts:
+                # remove stray leading bullets or remaining digits
+                cleaned = re.sub(r"^[\s\-\(\[\)\.]*\d*[\)\.\-]*\s*", "", p).strip()
+                if re.search(r"[A-Za-z]", cleaned) and len(cleaned) >= 5:
+                    good_parts.append(cleaned)
+            if len(good_parts) > 1:
+                chosen = random.choice(good_parts)
+                logger.info(f"Picked numbered variant: {chosen[:80]}")
+                return chosen
+            # If we found exactly one reasonable part, use it
+            if len(good_parts) == 1:
+                return good_parts[0]
+            # Fallback: split by non-empty lines and pick one that contains letters
+            lines = [l.strip() for l in defn.splitlines() if l.strip()]
+            good_lines = [l for l in lines if re.search(r"[A-Za-z]", l) and len(l) >= 5]
+            if len(good_lines) >= 1:
+                chosen = random.choice(good_lines)
+                logger.info(f"Picked line-variant: {chosen[:80]}")
+                return chosen
             return defn
         correct_def = pick_single_definition(current["definition"])
-        # Pick 3 incorrect answers
         incorrect_terms = [t for t in all_terms if t["term"] != correct_term]
         incorrect_choices = random.sample(incorrect_terms, 3)
         options = []
@@ -482,51 +714,160 @@ async def quiz(interaction: discord.Interaction, questions: int = 1):
             options.append({"term": t["term"], "definition": d, "is_correct": False})
         options.append({"term": correct_term, "definition": correct_def, "is_correct": True})
         random.shuffle(options)
+        correct_idx = next(i for i, o in enumerate(options) if o["is_correct"])
+        correct_indices.append(correct_idx)
+        logger.info(f"Built question {q_idx+1}/{questions} term='{correct_term}' correct_idx={correct_idx}")
+        # Build a cleaner embed with fields for each multiple-choice option
         embed = discord.Embed(
-            title=f"Question {q_idx+1}/{questions}: What is the correct definition for: {correct_term}?",
+            title=f"Brevity Quiz!",
+            description=f"What is the correct definition of:\n**{correct_term}**\n\n",
             color=discord.Color.orange()
         )
-        option_labels = ["A", "B", "C", "D"]
+        # Format each option so the label and definition appear on one visible line.
+        # Place the letter+definition into the field value as a blockquote and
+        # leave the field name empty. Truncate very long definitions to stay
+        # comfortably under Discord's embed limits.
+        letter_labels = ["A", "B", "C", "D"]
         for idx, opt in enumerate(options):
-            embed.add_field(name=f"{option_labels[idx]}", value=opt["definition"], inline=False)
-        class QuizView(discord.ui.View):
-            def __init__(self, options):
-                super().__init__(timeout=60)
-                self.options = options
-            @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
-            async def optionA(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
-                await self.handle_answer(interaction_btn, 0)
-            @discord.ui.button(label="B", style=discord.ButtonStyle.primary)
-            async def optionB(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
-                await self.handle_answer(interaction_btn, 1)
-            @discord.ui.button(label="C", style=discord.ButtonStyle.primary)
-            async def optionC(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
-                await self.handle_answer(interaction_btn, 2)
-            @discord.ui.button(label="D", style=discord.ButtonStyle.primary)
-            async def optionD(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
-                await self.handle_answer(interaction_btn, 3)
-            async def handle_answer(self, interaction_btn, idx):
-                if interaction_btn.user.id != interaction.user.id:
-                    await interaction_btn.response.send_message("This quiz is not for you!", ephemeral=True)
-                    return
-                if self.options[idx]["is_correct"]:
-                    msg = f"✅ Correct! {option_labels[idx]}. {self.options[idx]['definition']}"
-                    score["correct"] += 1
-                else:
-                    correct_idx = next(i for i, o in enumerate(self.options) if o["is_correct"])
-                    msg = f"❌ Incorrect. The correct answer was {option_labels[correct_idx]}: {self.options[correct_idx]['definition']}"
-                await interaction_btn.response.send_message(msg, ephemeral=True)
-                self.stop()
-                # Ask next question or finish
-                if q_idx + 1 < questions:
-                    await ask_question(q_idx + 1)
-                else:
-                    await interaction.followup.send(f"Quiz complete! You got {score['correct']} out of {score['total']} correct.", ephemeral=True)
-        if q_idx == 0:
-            await interaction.response.send_message(embed=embed, view=QuizView(options), ephemeral=True)
+            label = letter_labels[idx] if idx < len(letter_labels) else str(idx)
+            raw_def = opt.get("definition", "")
+            # Only mask occurrences of the current quiz term (correct_term),
+            # not other brevity terms that may appear in option text.
+            display = sanitize_definition_for_quiz(raw_def, correct_term)
+            # prefix each line with '> ' so the entire multi-line definition stays inside the blockquote
+            display_block = "\n".join([" " + line for line in display.splitlines()])
+            opt["display"] = display
+            embed.add_field(name="", value=f"**`{label}`** {display_block}", inline=False)
+        embed.set_footer(text=f"Question {q_idx+1} of {questions} • Quiz initiated by {interaction.user.display_name}")
+        view = PublicQuizView(q_idx, correct_idx, quiz_id, r, timeout=duration*60)
+        embeds.append(embed)
+        views.append(view)
+        used_options.append(options)
+
+    # Post all questions
+    for embed, view in zip(embeds, views):
+        msg = await interaction.channel.send(embed=embed, view=view)
+        view.message = msg
+        view.message_id = msg.id
+        messages.append(msg)
+        logger.info(f"Posted quiz message id={msg.id} quiz_id={quiz_id} q_index={view.question_idx}")
+
+    await interaction.response.send_message(f"**Brevity quiz started!** You have {duration} minute(s) to answer {questions} question(s).", ephemeral=False)
+
+    # Wait for the total duration, then collect and post results
+    from datetime import datetime, timedelta
+    async def close_and_summarize():
+        logger.info(f"close_and_summarize sleeping until timeout for quiz_id={quiz_id}")
+        await discord.utils.sleep_until(discord.utils.utcnow() + timedelta(seconds=duration*60))
+        logger.info(f"close_and_summarize started for quiz_id={quiz_id}")
+        # Build an embed for results instead of a long plain-text message
+        results_embed = discord.Embed(title="Brevity Quiz Results", color=discord.Color.green())
+        user_correct = {}  # user_id -> correct count for this quiz
+        user_participation = set()
+        for i, view in enumerate(views):
+            answers = r.hgetall(f"quiz:{quiz_id}:answers:{i}")
+            logger.info(f"Fetched answers for quiz_id={quiz_id} q_index={i} count={len(answers)}")
+            correct_users = [uid for uid, idx in answers.items() if str(idx) == str(view.correct_idx)]
+            for uid, idx in answers.items():
+                user_participation.add(uid)
+                if str(idx) == str(view.correct_idx):
+                    user_correct[uid] = user_correct.get(uid, 0) + 1
+            correct_mentions = ", ".join(f"<@{uid}>" for uid in correct_users) or "None"
+            term = quiz_terms[i]["term"]
+            # Use the option text used in the multiple choice for the correct definition
+            opt = used_options[i][view.correct_idx]
+            correct_def_short = opt["definition"]
+            # Add a field per question to the results embed for clarity
+            field_name = f"`Q{i+1}:` {term}"
+            field_value = f"**`Answer:`**  **{option_labels[view.correct_idx]}** - {correct_def_short}\n **`Correct users:`** {correct_mentions}\n"
+            results_embed.add_field(name=field_name, value=field_value, inline=False)
+
+        # Save each user's result to Redis (capped at 10)
+        total = len(views)
+        for uid in user_participation:
+            correct = user_correct.get(uid, 0)
+            entry = json.dumps({"correct": correct, "total": total, "ts": int(time.time())})
+            key = f"greenie:{interaction.guild_id}:{uid}"
+            r.lpush(key, entry)
+            r.ltrim(key, 0, 9)  # Keep only last 10
+            logger.info(f"Saved greenie entry for guild={interaction.guild_id} user={uid} -> {correct}/{total}")
+
+        # Per-quiz leaderboard -> add as an embed field
+        if user_correct:
+            leaderboard = sorted(user_correct.items(), key=lambda x: -x[1])
+            leaderboard_lines = []
+            for uid, correct in leaderboard:
+                percent = int(100 * correct / total)
+                leaderboard_lines.append(f"<@{uid}> got {correct}/{total} ({percent}%)")
+            results_embed.add_field(name="Quiz Leaderboard", value="\n".join(leaderboard_lines), inline=False)
         else:
-            await interaction.followup.send(embed=embed, view=QuizView(options), ephemeral=True)
-    await ask_question(0)
+            results_embed.add_field(name="Quiz Leaderboard", value="No correct answers this round.", inline=False)
+
+        # Greenie Board (last 10 quizzes, 10 most recent users) -> add as an embed field
+        greenie_keys = r.keys(f"greenie:{interaction.guild_id}:*")
+        user_greenies = []
+        for key in greenie_keys:
+            uid = key.split(":")[-1]
+            entries = [json.loads(e) for e in r.lrange(key, 0, 9)]
+            if entries:
+                avg = sum(e["correct"] / e["total"] for e in entries) / len(entries)
+                user_greenies.append((uid, entries, avg))
+        user_greenies.sort(key=lambda x: (-x[2], -max(e["ts"] for e in x[1])))
+        greenie_lines = []
+        for user in user_greenies[:10]:
+            uid, entries, avg = user
+            row = ""
+            for e in entries:
+                pct = e["correct"] / e["total"] if e["total"] else 0
+                if pct >= 0.8:
+                    row += "🟢"
+                elif pct >= 0.5:
+                    row += "🟡"
+                else:
+                    row += "🔴"
+            row = row.ljust(10, "◻")
+            avg_pct = int(avg * 100)
+            greenie_lines.append(f"<@{uid}>: {row}  {avg_pct}%")
+        if greenie_lines:
+            results_embed.add_field(name="Greenie Board (Last 10 quizzes)", value="\n".join(greenie_lines), inline=False)
+        logger.info(f"Sending summary embed for quiz_id={quiz_id} to channel={interaction.channel.id}")
+        await interaction.channel.send(embed=results_embed)
+    # Schedule the summary task
+    import asyncio
+    asyncio.create_task(close_and_summarize())
+# Greenie Board command
+@tree.command(name="greenieboard", description="Show the Greenie Board for this server (last 10 quizzes per user)")
+async def greenieboard(interaction: discord.Interaction):
+    guild_id = interaction.guild_id
+    greenie_keys = r.keys(f"greenie:{guild_id}:*")
+    user_greenies = []
+    for key in greenie_keys:
+        uid = key.split(":")[-1]
+        entries = [json.loads(e) for e in r.lrange(key, 0, 9)]
+        if entries:
+            avg = sum(e["correct"] / e["total"] for e in entries) / len(entries)
+            user_greenies.append((uid, entries, avg))
+    user_greenies.sort(key=lambda x: (-x[2], -max(e["ts"] for e in x[1])))
+    board = "**Greenie Board (Last 10 Quizzes):**\n"
+    for user in user_greenies[:10]:
+        uid, entries, avg = user
+        row = ""
+        for e in entries:
+            pct = e["correct"] / e["total"] if e["total"] else 0
+            if pct >= 0.8:
+                row += "🟢"
+            elif pct >= 0.5:
+                row += "🟡"
+            else:
+                row += "🔴"
+            # ljust requires a single character fill; use single-codepoint '▫' instead of '▫️'
+        row = row.ljust(10, "◻")
+        avg_pct = int(avg * 100)
+        board += f"<@{uid}>: {row}  {avg_pct}% average\n"
+    # Send as a code block for fixed-width alignment
+    board_code = "```" + "\n" + board + "```"
+    await interaction.response.send_message(board_code, ephemeral=False)
+
 # -------------------------------
 # BACKGROUND TASKS
 # -------------------------------
@@ -627,3 +968,56 @@ async def on_guild_remove(guild):
     r.delete(f"{FREQ_KEY_PREFIX}{guild_id}")
     r.delete(f"{LAST_POSTED_KEY_PREFIX}{guild_id}")
     r.srem(DISABLED_GUILDS_KEY, str(guild_id))
+
+
+class PublicQuizView(discord.ui.View):
+    def __init__(self, message_id, options, correct_idx, timeout=60):
+        super().__init__(timeout=timeout)
+        self.message_id = message_id
+        self.options = options
+        self.correct_idx = correct_idx
+        self.votes = {}  # user_id -> selected_index
+        self.message = None
+
+    async def on_timeout(self):
+        correct_users = [uid for uid, idx in self.votes.items() if idx == self.correct_idx]
+        key = f"quiz_results:{self.message_id}"
+        r.set(key, json.dumps({
+            "correct_idx": self.correct_idx,
+            "votes": self.votes
+        }))
+        r.expire(key, 6 * 3600)
+
+        for uid, idx in self.votes.items():
+            score_key = f"user_score:{uid}"
+            prev = json.loads(r.get(score_key) or '{"correct": 0, "total": 0}')
+            prev["correct"] += int(idx == self.correct_idx)
+            prev["total"] += 1
+            r.set(score_key, json.dumps(prev))
+
+        correct_mentions = ", ".join(f"<@{uid}>" for uid in correct_users) or "None"
+        answer_text = (
+            f"The correct answer was **{['A', 'B', 'C', 'D'][self.correct_idx]}**: {self.options[self.correct_idx]['definition']}\n"
+            f"✅ Correct users: {correct_mentions}"
+        )
+
+        await self.message.channel.send(answer_text)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id not in self.votes
+
+    async def handle_vote(self, interaction, idx):
+        self.votes[interaction.user.id] = idx
+        await interaction.response.send_message(f"Vote recorded: {['A', 'B', 'C', 'D'][idx]}", ephemeral=True)
+
+    @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
+    async def button_a(self, interaction, button): await self.handle_vote(interaction, 0)
+
+    @discord.ui.button(label="B", style=discord.ButtonStyle.primary)
+    async def button_b(self, interaction, button): await self.handle_vote(interaction, 1)
+
+    @discord.ui.button(label="C", style=discord.ButtonStyle.primary)
+    async def button_c(self, interaction, button): await self.handle_vote(interaction, 2)
+
+    @discord.ui.button(label="D", style=discord.ButtonStyle.primary)
+    async def button_d(self, interaction, button): await self.handle_vote(interaction, 3)
