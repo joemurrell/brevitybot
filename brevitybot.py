@@ -998,11 +998,101 @@ async def checkperms(interaction: discord.Interaction):
     embed = discord.Embed(title="Bot Permissions — Channel Diagnostic", color=discord.Color.blue())
     embed.add_field(name="Channel", value=f"<#{channel.id}>", inline=False)
     perm_lines = []
+    # Show the specific required permissions first
     for attr, name in required.items():
         ok = getattr(perms, attr, False)
         check = "✅" if ok else "❌"
-        perm_lines.append(f"{check} {name}")
+        perm_lines.append(f"{check} {name} ({attr})")
     embed.add_field(name="Required permissions", value="\n".join(perm_lines), inline=False)
+
+    # Attempt to iterate all permission flags from the Permissions object for a full dump
+    all_perm_lines = []
+    try:
+        # discord.Permissions supports iteration yielding (name, value)
+        for name, value in perms:
+            check = "✅" if value else "❌"
+            all_perm_lines.append(f"{check} {name}")
+    except Exception:
+        # Fallback: use a conservative known list of permission attribute names
+        perm_attr_list = [
+            "create_instant_invite", "kick_members", "ban_members", "administrator",
+            "manage_channels", "manage_guild", "add_reactions", "view_audit_log",
+            "priority_speaker", "stream", "view_channel", "send_messages", "send_tts_messages",
+            "manage_messages", "embed_links", "attach_files", "read_message_history", "mention_everyone",
+            "use_external_emojis", "manage_nicknames", "manage_roles", "manage_webhooks", "manage_emojis_and_stickers",
+            "connect", "speak", "mute_members", "deafen_members", "move_members", "use_vad",
+            "change_nickname", "moderate_members", "request_to_speak", "manage_threads", "create_public_threads",
+            "create_private_threads", "send_messages_in_threads"
+        ]
+        for name in perm_attr_list:
+            val = getattr(perms, name, None)
+            check = "✅" if val else "❌"
+            all_perm_lines.append(f"{check} {name}")
+
+    # Add a field showing all permission flags
+    # Truncate if too long for an embed field
+    all_perm_text = "\n".join(all_perm_lines)
+    if len(all_perm_text) > 1000:
+        all_perm_text = all_perm_text[:997] + "..."
+    embed.add_field(name="All permission flags (bot) ", value=all_perm_text, inline=False)
+
+    # Channel-specific overwrites for the bot (explicit allow/deny)
+    try:
+        ow = channel.overwrites_for(bot_member)
+        ow_lines = []
+        for name, value in ow:
+            if value is None:
+                state = "(unset)"
+            elif value:
+                state = "Allow"
+            else:
+                state = "Deny"
+            ow_lines.append(f"{name}: {state}")
+        ow_text = "\n".join(ow_lines) if ow_lines else "No channel-specific overwrites for bot_member."
+    except Exception:
+        ow_text = "Could not inspect channel overwrites."
+    # Ensure embed field length <= 1024
+    if len(ow_text) > 1000:
+        ow_text = ow_text[:997] + "..."
+    embed.add_field(name="Channel overwrites for bot", value=ow_text, inline=False)
+
+    # Role-by-role channel overwrites for the bot's roles
+    role_overwrites_lines = []
+    try:
+        for role in bot_member.roles:
+            if role.is_default():
+                role_name = f"@everyone ({role.id})"
+            else:
+                role_name = f"{role.name} ({role.id})"
+            ro = channel.overwrites_for(role)
+            # Summarize overwrites
+            entries = []
+            for name, value in ro:
+                if value is None:
+                    continue
+                entries.append(f"{name}={'Allow' if value else 'Deny'}")
+            if entries:
+                role_overwrites_lines.append(f"{role_name}: {', '.join(entries)}")
+    except Exception:
+        pass
+    if role_overwrites_lines:
+        role_ow_text = "\n".join(role_overwrites_lines)
+        if len(role_ow_text) > 1000:
+            role_ow_text = role_ow_text[:997] + "..."
+        embed.add_field(name="Role-level overwrites in this channel", value=role_ow_text, inline=False)
+
+    # Roles the bot has and their base permissions (for quick inspection)
+    role_lines = []
+    try:
+        for role in bot_member.roles:
+            role_lines.append(f"{role.name} ({role.id}) -> perms: {int(role.permissions.value)}")
+    except Exception:
+        role_lines.append("Could not enumerate roles/perms")
+    if role_lines:
+        role_text = "\n".join(role_lines)
+        if len(role_text) > 1000:
+            role_text = role_text[:997] + "..."
+        embed.add_field(name="Bot roles & permission ints", value=role_text, inline=False)
 
     if missing:
         embed.color = discord.Color.red()
