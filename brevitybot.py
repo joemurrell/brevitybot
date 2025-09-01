@@ -453,7 +453,7 @@ async def build_greenie_board_text(guild, user_greenies, name_col: int = 14, as_
             else:
                 row_emojis.append("🔴")
         while len(row_emojis) < 10:
-            row_emojis.append("◻")
+            row_emojis.append("⬜")
         row = "".join(row_emojis)
         avg_pct = int(avg * 100)
 
@@ -467,10 +467,10 @@ async def build_greenie_board_text(guild, user_greenies, name_col: int = 14, as_
         lines.append(f"{left} | {results} | {pct} avg")
 
     board = "\n".join(lines)
-    code_block = f"\n`{board}`\n"
+    code_block = f"```\n{board}\n```"
     if as_field:
         return code_block
-    header = "\n**Greenie Board (Last 10 Quizzes):**"
+    header = "**Greenie Board (Last 10 Quizzes):**"
     board_code = f"{header}\n{code_block}"
     return board_code
 
@@ -973,8 +973,11 @@ async def quiz(
             for uid, correct in leaderboard:
                 percent = int(100 * correct / total)
                 leaderboard_lines.append(f"<@{uid}> got {correct}/{total} ({percent}%)")
+            # add a blank field to visually separate question list from leaderboard
+            results_embed.add_field(name="\u200b", value="\u200b", inline=False)
             results_embed.add_field(name="Quiz Leaderboard", value="\n".join(leaderboard_lines), inline=False)
         else:
+            results_embed.add_field(name="\u200b", value="\u200b", inline=False)
             results_embed.add_field(name="Quiz Leaderboard", value="No correct answers this round.", inline=False)
 
         # Greenie Board (last 10 quizzes, 10 most recent users) -> add as an embed field
@@ -994,6 +997,8 @@ async def quiz(
             # Embed fields must be <= 1024 characters
             if len(board_field) > 1024:
                 board_field = board_field[:1021] + "..."
+            # add a blank field to visually separate leaderboard from greenie board
+            results_embed.add_field(name="\u200b", value="\u200b", inline=False)
             results_embed.add_field(name="Greenie Board (Last 10 quizzes)", value=board_field, inline=False)
         except Exception:
             logger.exception("Failed to build greenie board during quiz summary")
