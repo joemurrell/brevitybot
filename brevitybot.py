@@ -467,10 +467,10 @@ async def build_greenie_board_text(guild, user_greenies, name_col: int = 14, as_
         lines.append(f"{left} | {results} | {pct} avg")
 
     board = "\n".join(lines)
-    code_block = f"```\n{board}\n```"
+    code_block = f"\n`{board}`\n"
     if as_field:
         return code_block
-    header = "**Greenie Board (Last 10 Quizzes):**"
+    header = "\n**Greenie Board (Last 10 Quizzes):**"
     board_code = f"{header}\n{code_block}"
     return board_code
 
