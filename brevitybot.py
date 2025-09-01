@@ -973,9 +973,9 @@ async def quiz(
             for uid, correct in leaderboard:
                 percent = int(100 * correct / total)
                 leaderboard_lines.append(f"<@{uid}> got {correct}/{total} ({percent}%)")
-            results_embed.add_field(name="Quiz Leaderboard", value="\n".join(leaderboard_lines), inline=False)
+            results_embed.add_field(name="Quiz Leaderboard", value="\n" + "\n".join(leaderboard_lines), inline=False)
         else:
-            results_embed.add_field(name="Quiz Leaderboard", value="No correct answers this round.", inline=False)
+            results_embed.add_field(name="Quiz Leaderboard", value="\nNo correct answers this round.", inline=False)
 
         # Greenie Board (last 10 quizzes, 10 most recent users) -> add as an embed field
         greenie_keys = r.keys(f"greenie:{interaction.guild_id}:*")
@@ -994,7 +994,7 @@ async def quiz(
             # Embed fields must be <= 1024 characters
             if len(board_field) > 1024:
                 board_field = board_field[:1021] + "..."
-            results_embed.add_field(name="Greenie Board (Last 10 quizzes)", value=board_field, inline=False)
+            results_embed.add_field(name="Greenie Board (Last 10 quizzes)", value="\n" + board_field, inline=False)
         except Exception:
             logger.exception("Failed to build greenie board during quiz summary")
         logger.info(f"Sending summary embed for quiz_id={quiz_id} to channel={interaction.channel.id}")
