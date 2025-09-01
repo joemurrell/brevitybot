@@ -395,12 +395,84 @@ def get_all_terms():
     terms_data = r.get(TERMS_KEY)
     if not terms_data:
         return []
-
+    
     try:
         return json.loads(terms_data)
     except json.JSONDecodeError as e:
         logger.error("Failed to decode terms data from Redis: %s", e)
         return []
+
+
+async def build_greenie_board_text(guild, user_greenies, name_col: int = 14, as_field: bool = False):
+    """Return the Greenie Board text.
+    If `as_field` is False (default) returns a decorated message with header + code block suitable
+    for sending as a normal message. If `as_field` is True, returns only a code-block string that
+    can be used as an embed field value (no external header).
+    `user_greenies` should be a list of tuples (uid, entries, avg) as used elsewhere.
+    """
+    lines = []
+    for user in user_greenies[:10]:
+        uid, entries, avg = user
+        # Resolve display name if possible (prefer in-guild display name, no ping)
+        name = None
+        member = None
+        try:
+            if guild:
+                member = guild.get_member(int(uid))
+                if not member:
+                    try:
+                        member = await guild.fetch_member(int(uid))
+                    except Exception:
+                        member = None
+            if member:
+                name = member.display_name
+        except Exception:
+            name = None
+
+        if not name:
+            try:
+                user_obj = await client.fetch_user(int(uid))
+                name = getattr(user_obj, 'name', str(uid))
+            except Exception:
+                name = str(uid)
+
+        safe_name = name.replace("\n", " ")
+        if len(safe_name) > 12:
+            username = safe_name[:11] + "…"
+        else:
+            username = safe_name
+
+        # Build emoji row (10 slots) with NO spaces between emojis
+        row_emojis = []
+        for e in entries:
+            pct = e["correct"] / e["total"] if e["total"] else 0
+            if pct >= 0.8:
+                row_emojis.append("🟢")
+            elif pct >= 0.5:
+                row_emojis.append("🟡")
+            else:
+                row_emojis.append("🔴")
+        while len(row_emojis) < 10:
+            row_emojis.append("◻")
+        row = "".join(row_emojis)
+        avg_pct = int(avg * 100)
+
+        if len(username) > name_col:
+            left = username[: name_col - 1] + "…"
+        else:
+            left = username.ljust(name_col)
+
+        results = row
+        pct = f"{avg_pct:>3}%"
+        lines.append(f"{left} | {results} | {pct} avg")
+
+    board = "\n".join(lines)
+    code_block = f"```\n{board}\n```"
+    if as_field:
+        return code_block
+    header = "**Greenie Board (Last 10 Quizzes):**"
+    board_code = f"{header}\n{code_block}"
+    return board_code
 
 def get_next_brevity_term(guild_id):
     all_terms = get_all_terms()
@@ -915,23 +987,16 @@ async def quiz(
                 avg = sum(e["correct"] / e["total"] for e in entries) / len(entries)
                 user_greenies.append((uid, entries, avg))
         user_greenies.sort(key=lambda x: (-x[2], -max(e["ts"] for e in x[1])))
-        greenie_lines = []
-        for user in user_greenies[:10]:
-            uid, entries, avg = user
-            row = ""
-            for e in entries:
-                pct = e["correct"] / e["total"] if e["total"] else 0
-                if pct >= 0.8:
-                    row += "🟢"
-                elif pct >= 0.5:
-                    row += "🟡"
-                else:
-                    row += "🔴"
-            row = row.ljust(10, "◻")
-            avg_pct = int(avg * 100)
-            greenie_lines.append(f"<@{uid}>: {row}  {avg_pct}%")
-        if greenie_lines:
-            results_embed.add_field(name="Greenie Board (Last 10 quizzes)", value="\n".join(greenie_lines), inline=False)
+        # Use the shared builder so the output matches /greenieboard exactly.
+        # Insert the board INTO the results embed as a code-block field.
+        try:
+            board_field = await build_greenie_board_text(interaction.guild, user_greenies, as_field=True)
+            # Embed fields must be <= 1024 characters
+            if len(board_field) > 1024:
+                board_field = board_field[:1021] + "..."
+            results_embed.add_field(name="Greenie Board (Last 10 quizzes)", value=board_field, inline=False)
+        except Exception:
+            logger.exception("Failed to build greenie board during quiz summary")
         logger.info(f"Sending summary embed for quiz_id={quiz_id} to channel={interaction.channel.id}")
         await interaction.channel.send(embed=results_embed)
     # Schedule the summary task
@@ -950,25 +1015,12 @@ async def greenieboard(interaction: discord.Interaction):
             avg = sum(e["correct"] / e["total"] for e in entries) / len(entries)
             user_greenies.append((uid, entries, avg))
     user_greenies.sort(key=lambda x: (-x[2], -max(e["ts"] for e in x[1])))
-    board = "**Greenie Board (Last 10 Quizzes):**\n"
-    for user in user_greenies[:10]:
-        uid, entries, avg = user
-        row = ""
-        for e in entries:
-            pct = e["correct"] / e["total"] if e["total"] else 0
-            if pct >= 0.8:
-                row += "🟢"
-            elif pct >= 0.5:
-                row += "🟡"
-            else:
-                row += "🔴"
-            # ljust requires a single character fill; use single-codepoint '▫' instead of '▫️'
-        row = row.ljust(10, "◻")
-        avg_pct = int(avg * 100)
-        board += f"<@{uid}>: {row}  {avg_pct}% average\n"
-    # Send as a code block for fixed-width alignment
-    board_code = "```" + "\n" + board + "```"
-    await interaction.response.send_message(board_code, ephemeral=False)
+    try:
+        board_text = await build_greenie_board_text(interaction.guild, user_greenies)
+        await interaction.response.send_message(board_text, ephemeral=False)
+    except Exception:
+        logger.exception("Failed to build/send greenie board for command")
+        await interaction.response.send_message("Could not build Greenie Board.", ephemeral=True)
 
 
 @tree.command(name="checkperms", description="Show the bot's effective permissions in this channel")
