@@ -681,29 +681,49 @@ async def quiz(
                         return line.strip()
                 return defn
             correct_def = pick_single_definition(current["definition"])
+            
+            # Randomly choose question type: "term_to_definition" or "definition_to_term" 
+            question_type = random.choice(["term_to_definition", "definition_to_term"])
+            
             incorrect_terms = [t for t in all_terms if t["term"] != correct_term]
             incorrect_choices = random.sample(incorrect_terms, 3)
             options = []
-            for t in incorrect_choices:
-                d = pick_single_definition(t["definition"])
-                options.append({"term": t["term"], "definition": d, "is_correct": False})
-            options.append({"term": correct_term, "definition": correct_def, "is_correct": True})
-            random.shuffle(options)
-            option_labels = ["A", "B", "C", "D"]
-            if mode == "private":
+            
+            if question_type == "term_to_definition":
+                # Traditional format: show term, pick definition
+                for t in incorrect_choices:
+                    d = pick_single_definition(t["definition"])
+                    options.append({"term": t["term"], "definition": d, "is_correct": False})
+                options.append({"term": correct_term, "definition": correct_def, "is_correct": True})
+                random.shuffle(options)
+                option_labels = ["A", "B", "C", "D"]
+                
                 # Use fields for each option for better readability
                 embed = discord.Embed(
                     title=f"Question {q_idx+1}/{questions}",
                     description=f"What is the correct definition of: **{correct_term}**",
                     color=discord.Color.orange()
                 )
-                # (no short-list in description) the options are rendered as
-                # blockquote fields below so we avoid duplicating them here.
-
-                # Render each option as an empty-name field with a blockquote value so
-                # the label and definition appear on the same visible line. Use the
-                # sanitizer to mask instances of the term in the displayed text.
-                for idx, opt in enumerate(options):
+            else:
+                # Inverse format: show definition, pick term
+                for t in incorrect_choices:
+                    options.append({"term": t["term"], "definition": t["definition"], "is_correct": False})
+                options.append({"term": correct_term, "definition": correct_def, "is_correct": True})
+                random.shuffle(options)
+                option_labels = ["A", "B", "C", "D"]
+                
+                # Show definition as question, terms as options
+                embed = discord.Embed(
+                    title=f"Question {q_idx+1}/{questions}",
+                    description=f"Which brevity term matches this definition:\n\n**{correct_def}**",
+                    color=discord.Color.orange()
+                )
+            
+            # Render each option as an empty-name field with a blockquote value so
+            # the label and content appear on the same visible line.
+            for idx, opt in enumerate(options):
+                if question_type == "term_to_definition":
+                    # Traditional format: show definitions as options
                     raw_def = opt.get("definition", "")
                     # Only mask occurrences of the current quiz term (correct_term),
                     # not other brevity terms that may appear in option text.
@@ -714,6 +734,11 @@ async def quiz(
                     # store display text for later reference in summaries if needed
                     opt["display"] = display
                     embed.add_field(name="", value=f"**`{option_labels[idx]}`** {display_block}", inline=False)
+                else:
+                    # Inverse format: show terms as options
+                    term = opt.get("term", "")
+                    opt["display"] = term  # store for later reference
+                    embed.add_field(name="", value=f"**`{option_labels[idx]}`** {term}", inline=False)
                 embed.set_footer(text=f"Question {q_idx+1} of {questions}")
                 embed.timestamp = discord.utils.utcnow()
                 class QuizView(discord.ui.View):
@@ -737,11 +762,17 @@ async def quiz(
                             await interaction_btn.response.send_message("This quiz is not for you!", ephemeral=True)
                             return
                         if self.options[idx]["is_correct"]:
-                            msg = f"✅ Correct! {option_labels[idx]}. {self.options[idx]['definition']}"
+                            if question_type == "term_to_definition":
+                                msg = f"✅ Correct! {option_labels[idx]}. {self.options[idx]['definition']}"
+                            else:
+                                msg = f"✅ Correct! {option_labels[idx]}. {self.options[idx]['term']}"
                             score["correct"] += 1
                         else:
                             correct_idx = next(i for i, o in enumerate(self.options) if o["is_correct"])
-                            msg = f"❌ Incorrect. The correct answer was {option_labels[correct_idx]}: {self.options[correct_idx]['definition']}"
+                            if question_type == "term_to_definition":
+                                msg = f"❌ Incorrect. The correct answer was {option_labels[correct_idx]}: {self.options[correct_idx]['definition']}"
+                            else:
+                                msg = f"❌ Incorrect. The correct answer was {option_labels[correct_idx]}: {self.options[correct_idx]['term']}"
                         await interaction_btn.response.send_message(msg, ephemeral=True)
                         self.stop()
                         if q_idx + 1 < questions:
@@ -764,6 +795,7 @@ async def quiz(
     views = []
     correct_indices = []
     used_options = []  # store the options used for each question (so summary matches options)
+    question_types = []  # store the question type for each question for summary display
     messages = []
     option_labels = ["A", "B", "C", "D"]
     for q_idx, current in enumerate(quiz_terms):
@@ -802,43 +834,73 @@ async def quiz(
                 return chosen
             return defn
         correct_def = pick_single_definition(current["definition"])
+        
+        # Randomly choose question type: "term_to_definition" or "definition_to_term" 
+        question_type = random.choice(["term_to_definition", "definition_to_term"])
+        
         incorrect_terms = [t for t in all_terms if t["term"] != correct_term]
         incorrect_choices = random.sample(incorrect_terms, 3)
         options = []
-        for t in incorrect_choices:
-            d = pick_single_definition(t["definition"])
-            options.append({"term": t["term"], "definition": d, "is_correct": False})
-        options.append({"term": correct_term, "definition": correct_def, "is_correct": True})
-        random.shuffle(options)
-        correct_idx = next(i for i, o in enumerate(options) if o["is_correct"])
-        correct_indices.append(correct_idx)
-        logger.info(f"Built question {q_idx+1}/{questions} term='{correct_term}' correct_idx={correct_idx}")
-        # Build a cleaner embed with fields for each multiple-choice option
-        embed = discord.Embed(
-            title=f"Brevity Quiz!",
-            description=f"What is the correct definition of:\n**{correct_term}**\n\n",
-            color=discord.Color.orange()
-        )
-        # Format each option so the label and definition appear on one visible line.
-        # Place the letter+definition into the field value as a blockquote and
-        # leave the field name empty. Truncate very long definitions to stay
-        # comfortably under Discord's embed limits.
+        
+        if question_type == "term_to_definition":
+            # Traditional format: show term, pick definition
+            for t in incorrect_choices:
+                d = pick_single_definition(t["definition"])
+                options.append({"term": t["term"], "definition": d, "is_correct": False})
+            options.append({"term": correct_term, "definition": correct_def, "is_correct": True})
+            random.shuffle(options)
+            correct_idx = next(i for i, o in enumerate(options) if o["is_correct"])
+            correct_indices.append(correct_idx)
+            logger.info(f"Built question {q_idx+1}/{questions} term='{correct_term}' correct_idx={correct_idx} type=term_to_definition")
+            
+            # Build a cleaner embed with fields for each multiple-choice option
+            embed = discord.Embed(
+                title=f"Brevity Quiz!",
+                description=f"What is the correct definition of:\n**{correct_term}**\n\n",
+                color=discord.Color.orange()
+            )
+        else:
+            # Inverse format: show definition, pick term
+            for t in incorrect_choices:
+                options.append({"term": t["term"], "definition": t["definition"], "is_correct": False})
+            options.append({"term": correct_term, "definition": correct_def, "is_correct": True})
+            random.shuffle(options)
+            correct_idx = next(i for i, o in enumerate(options) if o["is_correct"])
+            correct_indices.append(correct_idx)
+            logger.info(f"Built question {q_idx+1}/{questions} term='{correct_term}' correct_idx={correct_idx} type=definition_to_term")
+            
+            # Build embed showing definition as question, terms as options
+            embed = discord.Embed(
+                title=f"Brevity Quiz!",
+                description=f"Which brevity term matches this definition:\n\n**{correct_def}**\n\n",
+                color=discord.Color.orange()
+            )
+        # Format each option appropriately based on question type
         letter_labels = ["A", "B", "C", "D"]
         for idx, opt in enumerate(options):
             label = letter_labels[idx] if idx < len(letter_labels) else str(idx)
-            raw_def = opt.get("definition", "")
-            # Only mask occurrences of the current quiz term (correct_term),
-            # not other brevity terms that may appear in option text.
-            display = sanitize_definition_for_quiz(raw_def, correct_term)
-            # prefix each line with '> ' so the entire multi-line definition stays inside the blockquote
-            display_block = "\n".join([" " + line for line in display.splitlines()])
-            opt["display"] = display
-            embed.add_field(name="", value=f"**`{label}`** {display_block}", inline=False)
+            
+            if question_type == "term_to_definition":
+                # Traditional format: show definitions as options
+                raw_def = opt.get("definition", "")
+                # Only mask occurrences of the current quiz term (correct_term),
+                # not other brevity terms that may appear in option text.
+                display = sanitize_definition_for_quiz(raw_def, correct_term)
+                # prefix each line with '> ' so the entire multi-line definition stays inside the blockquote
+                display_block = "\n".join([" " + line for line in display.splitlines()])
+                opt["display"] = display
+                embed.add_field(name="", value=f"**`{label}`** {display_block}", inline=False)
+            else:
+                # Inverse format: show terms as options
+                term = opt.get("term", "")
+                opt["display"] = term
+                embed.add_field(name="", value=f"**`{label}`** {term}", inline=False)
         embed.set_footer(text=f"Question {q_idx+1} of {questions} • Quiz initiated by {interaction.user.display_name}")
         view = PublicQuizView(q_idx, correct_idx, quiz_id, r, timeout=duration*60)
         embeds.append(embed)
         views.append(view)
         used_options.append(options)
+        question_types.append(question_type)  # Store question type for summary display
 
     # Post all questions
     channel = interaction.channel
@@ -948,12 +1010,21 @@ async def quiz(
                     user_correct[uid] = user_correct.get(uid, 0) + 1
             correct_mentions = ", ".join(f"<@{uid}>" for uid in correct_users) or "None"
             term = quiz_terms[i]["term"]
-            # Use the option text used in the multiple choice for the correct definition
+            # Use the option text used in the multiple choice for the correct answer display
             opt = used_options[i][view.correct_idx]
-            correct_def_short = opt["definition"]
-            # Add a field per question to the results embed for clarity
-            field_name = f"**Q{i+1}:** {term}"
-            field_value = f"**Answer:**  **`{option_labels[view.correct_idx]}`** - {correct_def_short}\n **Correct users:** {correct_mentions}\n"
+            question_type = question_types[i]
+            
+            if question_type == "term_to_definition":
+                # Traditional format: question was term, answer was definition
+                correct_answer_text = opt["definition"]
+                field_name = f"**Q{i+1}:** {term}"
+            else:
+                # Inverse format: question was definition, answer was term
+                correct_answer_text = opt["term"]
+                definition_short = quiz_terms[i]["definition"][:100] + "..." if len(quiz_terms[i]["definition"]) > 100 else quiz_terms[i]["definition"]
+                field_name = f"**Q{i+1}:** {definition_short}"
+                
+            field_value = f"**Answer:**  **`{option_labels[view.correct_idx]}`** - {correct_answer_text}\n **Correct users:** {correct_mentions}\n"
             results_embed.add_field(name=field_name, value=field_value, inline=False)
 
         # Save each user's result to Redis (capped at 10)
