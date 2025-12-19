@@ -1351,10 +1351,19 @@ async def on_ready():
     last_sync_ts = await r.get("last_command_sync")
     current_time = time.time()
     
+    # Parse last sync timestamp with error handling
+    last_sync_time = None
+    if last_sync_ts:
+        try:
+            last_sync_time = float(last_sync_ts)
+        except (ValueError, TypeError):
+            logger.warning("Invalid last_command_sync value in Redis, treating as never synced")
+            last_sync_time = None
+    
     # Only sync if: not synced this session AND (never synced OR >1 hour since last sync)
     should_sync = not _commands_synced and (
-        last_sync_ts is None or 
-        (current_time - float(last_sync_ts)) > 3600  # 1 hour cooldown
+        last_sync_time is None or 
+        (current_time - last_sync_time) > 3600  # 1 hour cooldown
     )
     
     if should_sync:
@@ -1375,8 +1384,8 @@ async def on_ready():
             logger.error("Unexpected error syncing commands: %s", e)
             _commands_synced = True  # Don't retry this session
     else:
-        if last_sync_ts:
-            time_since = int(current_time - float(last_sync_ts))
+        if last_sync_time is not None:
+            time_since = int(current_time - last_sync_time)
             logger.info("Skipping command sync (last synced %d seconds ago)", time_since)
         else:
             logger.info("Skipping command sync (already synced this session)")
