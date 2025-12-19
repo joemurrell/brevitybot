@@ -949,7 +949,11 @@ async def quiz(
             await interaction.response.send_message("Couldn't announce the quiz; check my permissions.", ephemeral=True)
             return
 
-    for embed, view in zip(embeds, views):
+    for idx, (embed, view) in enumerate(zip(embeds, views)):
+        # Add a small delay between messages to avoid webhook rate limits (except for first message)
+        if idx > 0:
+            await asyncio.sleep(0.5)
+        
         try:
             msg = await interaction.followup.send(embed=embed, view=view)
         except Exception as e:
@@ -997,10 +1001,12 @@ async def quiz(
             except Exception:
                 logger.error("Also failed to send ephemeral response to the user about missing access.")
             return
-    view.message = msg
-    view.message_id = msg.id
-    messages.append(msg)
-    logger.info(f"Posted quiz message id={msg.id} quiz_id={quiz_id} q_index={view.question_idx}")
+        
+        # Store message reference for this view
+        view.message = msg
+        view.message_id = msg.id
+        messages.append(msg)
+        logger.info(f"Posted quiz message id={msg.id} quiz_id={quiz_id} q_index={view.question_idx}")
 
     # Start embed already sent above to allow followups; don't respond again here.
 
@@ -1325,9 +1331,12 @@ async def log_bot_stats():
 # -------------------------------
 # BOT READY EVENT
 # -------------------------------
+# Track if we've already synced commands to avoid rate limits
+_commands_synced = False
+
 @client.event
 async def on_ready():
-    global r
+    global r, _commands_synced
     # Initialize async Redis connection
     r = await aioredis.from_url(
         redis_url,
@@ -1336,7 +1345,42 @@ async def on_ready():
     logger.info("Connected to Redis at %s:%s", parsed_url.hostname, parsed_url.port)
     
     logger.info("Logged in as %s (ID: %s)", client.user.name, client.user.id)
-    await tree.sync()
+    
+    # Only sync commands if needed, with rate limit protection
+    # Check both in-memory flag and Redis timestamp to handle restarts
+    last_sync_ts = await r.get("last_command_sync")
+    current_time = time.time()
+    
+    # Only sync if: not synced this session AND (never synced OR >1 hour since last sync)
+    should_sync = not _commands_synced and (
+        last_sync_ts is None or 
+        (current_time - float(last_sync_ts)) > 3600  # 1 hour cooldown
+    )
+    
+    if should_sync:
+        logger.info("Syncing slash commands...")
+        try:
+            await tree.sync()
+            _commands_synced = True
+            await r.set("last_command_sync", str(current_time))
+            logger.info("Slash commands synced successfully")
+        except discord.HTTPException as e:
+            if e.status == 429:  # Rate limited
+                logger.warning("Command sync rate limited. Will retry on next restart (after cooldown).")
+                _commands_synced = True  # Don't retry this session
+            else:
+                logger.error("Failed to sync commands: %s", e)
+                _commands_synced = True  # Don't retry this session to avoid repeated errors
+        except Exception as e:
+            logger.error("Unexpected error syncing commands: %s", e)
+            _commands_synced = True  # Don't retry this session
+    else:
+        if last_sync_ts:
+            time_since = int(current_time - float(last_sync_ts))
+            logger.info("Skipping command sync (last synced %d seconds ago)", time_since)
+        else:
+            logger.info("Skipping command sync (already synced this session)")
+    
     if not post_brevity_term.is_running():
         post_brevity_term.start()
     if not refresh_terms_daily.is_running():
@@ -1347,6 +1391,14 @@ async def on_ready():
 
 if __name__ == "__main__":
     logger.info("Starting BrevityBot...")
+    
+    # Add a small startup delay to prevent rapid restart loops from triggering rate limits
+    # This gives Railway/hosting platform time to stabilize before attempting Discord connection
+    startup_delay = int(os.getenv("STARTUP_DELAY", "0"))
+    if startup_delay > 0:
+        logger.info("Waiting %d seconds before connecting (STARTUP_DELAY)...", startup_delay)
+        time.sleep(startup_delay)
+    
     client.run(DISCORD_BOT_TOKEN)
 
 
