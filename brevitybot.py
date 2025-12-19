@@ -949,7 +949,11 @@ async def quiz(
             await interaction.response.send_message("Couldn't announce the quiz; check my permissions.", ephemeral=True)
             return
 
-    for embed, view in zip(embeds, views):
+    for idx, (embed, view) in enumerate(zip(embeds, views)):
+        # Add a small delay between messages to avoid webhook rate limits (except for first message)
+        if idx > 0:
+            await asyncio.sleep(0.5)
+        
         try:
             msg = await interaction.followup.send(embed=embed, view=view)
         except Exception as e:
@@ -997,10 +1001,12 @@ async def quiz(
             except Exception:
                 logger.error("Also failed to send ephemeral response to the user about missing access.")
             return
-    view.message = msg
-    view.message_id = msg.id
-    messages.append(msg)
-    logger.info(f"Posted quiz message id={msg.id} quiz_id={quiz_id} q_index={view.question_idx}")
+        
+        # Store message reference for this view
+        view.message = msg
+        view.message_id = msg.id
+        messages.append(msg)
+        logger.info(f"Posted quiz message id={msg.id} quiz_id={quiz_id} q_index={view.question_idx}")
 
     # Start embed already sent above to allow followups; don't respond again here.
 
