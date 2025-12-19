@@ -4,3 +4,5 @@ test_*
 __pycache__/
 dump.rdb
 brevitybot.code-workspace
+pdf parser.py
+import fitz # PyMuPDF.py
