@@ -1325,9 +1325,12 @@ async def log_bot_stats():
 # -------------------------------
 # BOT READY EVENT
 # -------------------------------
+# Track if we've already synced commands to avoid rate limits
+_commands_synced = False
+
 @client.event
 async def on_ready():
-    global r
+    global r, _commands_synced
     # Initialize async Redis connection
     r = await aioredis.from_url(
         redis_url,
@@ -1336,7 +1339,16 @@ async def on_ready():
     logger.info("Connected to Redis at %s:%s", parsed_url.hostname, parsed_url.port)
     
     logger.info("Logged in as %s (ID: %s)", client.user.name, client.user.id)
-    await tree.sync()
+    
+    # Only sync commands once to avoid Discord rate limits
+    if not _commands_synced:
+        logger.info("Syncing slash commands...")
+        await tree.sync()
+        _commands_synced = True
+        logger.info("Slash commands synced successfully")
+    else:
+        logger.info("Skipping command sync (already synced this session)")
+    
     if not post_brevity_term.is_running():
         post_brevity_term.start()
     if not refresh_terms_daily.is_running():
