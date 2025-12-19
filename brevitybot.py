@@ -1391,6 +1391,14 @@ async def on_ready():
 
 if __name__ == "__main__":
     logger.info("Starting BrevityBot...")
+    
+    # Add a small startup delay to prevent rapid restart loops from triggering rate limits
+    # This gives Railway/hosting platform time to stabilize before attempting Discord connection
+    startup_delay = int(os.getenv("STARTUP_DELAY", "0"))
+    if startup_delay > 0:
+        logger.info("Waiting %d seconds before connecting (STARTUP_DELAY)...", startup_delay)
+        time.sleep(startup_delay)
+    
     client.run(DISCORD_BOT_TOKEN)
 
 
