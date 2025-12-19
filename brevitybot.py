@@ -3,11 +3,11 @@ from discord.ext import tasks
 from discord import app_commands
 import os
 import random
-import requests
+import aiohttp
 from bs4 import BeautifulSoup
 import re
 import logging
-import redis  # type: ignore
+import redis.asyncio as aioredis
 import json
 from dotenv import load_dotenv
 from urllib.parse import urlparse
@@ -105,13 +105,9 @@ if not redis_url:
 # REDIS CONFIGURATION
 # -------------------------------
 parsed_url = urlparse(redis_url)
-r = redis.Redis(
-    host=parsed_url.hostname,
-    port=parsed_url.port,
-    password=parsed_url.password,
-    decode_responses=True
-)
-logger.info("Connected to Redis at %s:%s", parsed_url.hostname, parsed_url.port)
+# Redis client will be initialized in on_ready
+r = None
+logger.info("Redis URL configured for %s:%s", parsed_url.hostname, parsed_url.port)
 
 # -------------------------------
 # CONSTANTS
@@ -139,52 +135,52 @@ def clean_term(term):
     cleaned = term.replace("*", "").strip()
     return cleaned
 
-def load_used_terms(guild_id):
-    return list(r.smembers(f"used_terms:{guild_id}"))
+async def load_used_terms(guild_id):
+    return list(await r.smembers(f"used_terms:{guild_id}"))
 
-def save_used_term(guild_id, term):
-    r.sadd(f"used_terms:{guild_id}", term)
+async def save_used_term(guild_id, term):
+    await r.sadd(f"used_terms:{guild_id}", term)
     logger.info("Saved used term '%s' for guild %s", term, guild_id)
 
-def save_config(guild_id, channel_id):
-    r.hset(CHANNEL_MAP_KEY, str(guild_id), channel_id)
+async def save_config(guild_id, channel_id):
+    await r.hset(CHANNEL_MAP_KEY, str(guild_id), channel_id)
     logger.info("Saved config: guild %s -> channel %s", guild_id, channel_id)
 
-def load_config(guild_id=None):
+async def load_config(guild_id=None):
     if guild_id:
-        channel_id = r.hget(CHANNEL_MAP_KEY, str(guild_id))
+        channel_id = await r.hget(CHANNEL_MAP_KEY, str(guild_id))
         return {"channel_id": int(channel_id)} if channel_id else None
     else:
-        all_configs = r.hgetall(CHANNEL_MAP_KEY)
+        all_configs = await r.hgetall(CHANNEL_MAP_KEY)
         return {gid: {"channel_id": int(cid)} for gid, cid in all_configs.items()}
 
-def set_post_frequency(guild_id, hours):
-    r.set(f"{FREQ_KEY_PREFIX}{guild_id}", hours)
+async def set_post_frequency(guild_id, hours):
+    await r.set(f"{FREQ_KEY_PREFIX}{guild_id}", hours)
     logger.info("Set post frequency for guild %s to %s hours", guild_id, hours)
 
-def get_post_frequency(guild_id):
-    return int(r.get(f"{FREQ_KEY_PREFIX}{guild_id}") or 24)
+async def get_post_frequency(guild_id):
+    return int(await r.get(f"{FREQ_KEY_PREFIX}{guild_id}") or 24)
 
-def set_last_posted(guild_id, timestamp):
-    r.set(f"{LAST_POSTED_KEY_PREFIX}{guild_id}", str(timestamp))
+async def set_last_posted(guild_id, timestamp):
+    await r.set(f"{LAST_POSTED_KEY_PREFIX}{guild_id}", str(timestamp))
 
-def get_last_posted(guild_id):
-    ts = r.get(f"{LAST_POSTED_KEY_PREFIX}{guild_id}")
+async def get_last_posted(guild_id):
+    ts = await r.get(f"{LAST_POSTED_KEY_PREFIX}{guild_id}")
     return float(ts) if ts else 0.0
 
-def is_posting_enabled(guild_id):
-    return not r.sismember(DISABLED_GUILDS_KEY, str(guild_id))
+async def is_posting_enabled(guild_id):
+    return not await r.sismember(DISABLED_GUILDS_KEY, str(guild_id))
 
-def enable_posting(guild_id):
-    r.srem(DISABLED_GUILDS_KEY, str(guild_id))
+async def enable_posting(guild_id):
+    await r.srem(DISABLED_GUILDS_KEY, str(guild_id))
     logger.info("Posting enabled for guild %s", guild_id)
 
-def disable_posting(guild_id):
-    r.sadd(DISABLED_GUILDS_KEY, str(guild_id))
+async def disable_posting(guild_id):
+    await r.sadd(DISABLED_GUILDS_KEY, str(guild_id))
     logger.info("Posting disabled for guild %s", guild_id)
 
 
-def get_random_flickr_jet(api_key):
+async def get_random_flickr_jet(api_key):
     flickr_url = "https://www.flickr.com/services/rest/"
     params = {
         "method": "flickr.photos.search",
@@ -201,14 +197,15 @@ def get_random_flickr_jet(api_key):
         "license": "1,2,4,5,7,9,10"
     }
     try:
-        response = requests.get(flickr_url, params=params)
-        data = response.json()
-        photos = data.get("photos", {}).get("photo", [])
-        if not photos:
-            logger.warning("No Flickr photos found.")
-            return None
-        photo = random.choice(photos)
-        return f"https://farm{photo['farm']}.staticflickr.com/{photo['server']}/{photo['id']}_{photo['secret']}_b.jpg"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(flickr_url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                data = await response.json()
+                photos = data.get("photos", {}).get("photo", [])
+                if not photos:
+                    logger.warning("No Flickr photos found.")
+                    return None
+                photo = random.choice(photos)
+                return f"https://farm{photo['farm']}.staticflickr.com/{photo['server']}/{photo['id']}_{photo['secret']}_b.jpg"
     except Exception as e:
         logger.error("Flickr fetch error: %s", e)
         return None
@@ -268,43 +265,51 @@ def sanitize_definition_for_quiz(defn: str, term: str, min_len: int = 15) -> str
 
     return s
     
-def parse_brevity_terms():
+async def parse_brevity_terms():
 
     url = "https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code"
     # Use a polite, identifiable User-Agent. Allow override via USER_AGENT env var.
     user_agent = os.getenv("USER_AGENT") or "BrevityBot/1.0 (+https://github.com/joemurrell/brevitybot)"
     headers = {"User-Agent": user_agent}
+    status = None
+    content = None
     try:
-        response = requests.get(url, headers=headers, timeout=15)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                content = await response.read()
+                status = response.status
     except Exception as e:
         logger.error("Failed to fetch brevity terms page: %s", e)
         return []
     # If Wikipedia rejected us with 403, do a single diagnostic retry with a common browser UA
-    if getattr(response, 'status_code', None) == 403:
+    if status == 403:
         logger.warning("Received 403 fetching brevity terms with User-Agent '%s'. Trying a diagnostic retry with a browser UA.", user_agent)
         fallback_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"}
         try:
-            response = requests.get(url, headers=fallback_headers, timeout=15)
-            logger.debug("Retry with browser User-Agent returned status %s", getattr(response, 'status_code', 'N/A'))
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=fallback_headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                    content = await response.read()
+                    status = response.status
+                    logger.debug("Retry with browser User-Agent returned status %s", status)
         except Exception as e:
             logger.error("Diagnostic retry failed: %s", e)
             return []
     # Log HTTP status and size for debugging
     try:
-        content_len = len(response.content or b"")
+        content_len = len(content or b"")
     except Exception:
         content_len = 0
-    logger.debug("Fetched %s (status=%s length=%s)", url, getattr(response, 'status_code', 'N/A'), content_len)
-    if getattr(response, 'status_code', 200) != 200:
-        logger.error("Non-200 response while fetching brevity terms: %s", getattr(response, 'status_code', None))
+    logger.debug("Fetched %s (status=%s length=%s)", url, status, content_len)
+    if status != 200:
+        logger.error("Non-200 response while fetching brevity terms: %s", status)
         # still attempt to parse body if present
-    soup = BeautifulSoup(response.content, "html.parser")
+    soup = BeautifulSoup(content, "html.parser")
     content_div = soup.find("div", class_="mw-parser-output")
     terms = []
 
     if not content_div:
         # Dump a short snippet of the page to logs to help debugging
-        snippet = (response.text[:1000] + "...") if response is not None and response.text else ""
+        snippet = (content.decode('utf-8')[:1000] + "...") if content else ""
         logger.error("Couldn't find Wikipedia content container. Page snippet:\n%s", snippet)
         return terms
 
@@ -347,15 +352,17 @@ def parse_brevity_terms():
         elif tag.name in ["ul", "ol"] and current_term:
             bullets = [f"- {li.get_text(' ', strip=True)}" for li in tag.find_all("li")]
             current_definition_parts.extend(bullets)
+        # Yield control periodically in long loops
+        await asyncio.sleep(0)
 
     flush_term()
     logger.info("Parsed %d brevity terms from HTML.", len(terms))
     return terms
 
 
-def update_brevity_terms():
+async def update_brevity_terms():
     logger.info("Refreshing brevity terms from Wikipedia...")
-    new_terms = parse_brevity_terms()
+    new_terms = await parse_brevity_terms()
 
     if not new_terms:
         logger.warning("No brevity terms parsed. Keeping existing terms.")
@@ -364,7 +371,7 @@ def update_brevity_terms():
     logger.info("Parsed %d brevity terms. Comparing with existing terms.", len(new_terms))
 
     # Load existing terms
-    existing_raw = r.get(TERMS_KEY)
+    existing_raw = await r.get(TERMS_KEY)
     existing_terms = json.loads(existing_raw) if existing_raw else []
 
     # Create dictionaries for comparison
@@ -378,11 +385,11 @@ def update_brevity_terms():
 
     # Backup current terms
     if existing_raw:
-        r.set(f"{TERMS_KEY}_backup", existing_raw)
+        await r.set(f"{TERMS_KEY}_backup", existing_raw)
         logger.info("Backed up existing terms to TERMS_KEY_backup.")
 
     # Update Redis with new terms
-    r.set(TERMS_KEY, json.dumps(new_terms))
+    await r.set(TERMS_KEY, json.dumps(new_terms))
 
     logger.info(
         "Successfully loaded %d brevity terms. Added: %d, Updated: %d, Unchanged: %d.",
@@ -391,8 +398,8 @@ def update_brevity_terms():
 
     return len(new_terms), len(added_terms), len(updated_terms)
 
-def get_all_terms():
-    terms_data = r.get(TERMS_KEY)
+async def get_all_terms():
+    terms_data = await r.get(TERMS_KEY)
     if not terms_data:
         return []
     
@@ -411,9 +418,9 @@ async def build_greenie_board_text(guild, user_greenies, name_col: int = 14, as_
     `user_greenies` should be a list of tuples (uid, entries, avg) as used elsewhere.
     """
     lines = []
-    for user in user_greenies[:10]:
-        uid, entries, avg = user
-        # Resolve display name if possible (prefer in-guild display name, no ping)
+    
+    # Parallelize member fetching for all users
+    async def fetch_member_name(uid):
         name = None
         member = None
         try:
@@ -425,17 +432,24 @@ async def build_greenie_board_text(guild, user_greenies, name_col: int = 14, as_
                     except Exception:
                         member = None
             if member:
-                name = member.display_name
+                return member.display_name
         except Exception:
-            name = None
+            pass
 
-        if not name:
-            try:
-                user_obj = await client.fetch_user(int(uid))
-                name = getattr(user_obj, 'name', str(uid))
-            except Exception:
-                name = str(uid)
-
+        try:
+            user_obj = await client.fetch_user(int(uid))
+            return getattr(user_obj, 'name', str(uid))
+        except Exception:
+            return str(uid)
+    
+    # Fetch all names in parallel
+    user_ids = [user[0] for user in user_greenies[:10]]
+    names = await asyncio.gather(*[fetch_member_name(uid) for uid in user_ids], return_exceptions=True)
+    
+    for idx, user in enumerate(user_greenies[:10]):
+        uid, entries, avg = user
+        name = names[idx] if not isinstance(names[idx], Exception) else str(uid)
+        
         safe_name = name.replace("\n", " ")
         if len(safe_name) > 12:
             username = safe_name[:11] + "…"
@@ -474,29 +488,29 @@ async def build_greenie_board_text(guild, user_greenies, name_col: int = 14, as_
     board_code = f"{header}\n{code_block}"
     return board_code
 
-def get_next_brevity_term(guild_id):
-    all_terms = get_all_terms()
+async def get_next_brevity_term(guild_id):
+    all_terms = await get_all_terms()
     if not all_terms:
         logger.warning("No brevity terms available.")
         return None
 
-    used_terms = load_used_terms(guild_id)
+    used_terms = await load_used_terms(guild_id)
     unused_terms = [t for t in all_terms if t["term"] not in used_terms]
 
     if not unused_terms:
         # All terms have been used — reset
         logger.info("All terms used for guild %s, resetting used terms.", guild_id)
-        r.delete(f"used_terms:{guild_id}")
+        await r.delete(f"used_terms:{guild_id}")
         used_terms = []
         unused_terms = all_terms  # now full list again
 
     chosen = random.choice(unused_terms)
-    save_used_term(guild_id, chosen["term"])
+    await save_used_term(guild_id, chosen["term"])
     return chosen
 
 
-def get_brevity_term_by_name(name):
-    for term in get_all_terms():
+async def get_brevity_term_by_name(name):
+    for term in await get_all_terms():
         if term["term"].lower() == name.lower():
             return term
     logger.info("No match found for brevity term: '%s'", name)
@@ -508,8 +522,8 @@ def get_brevity_term_by_name(name):
 # -------------------------------
 @tree.command(name="setup", description="Set the current channel for daily brevity posts.")
 async def setup(interaction: discord.Interaction):
-    save_config(interaction.guild.id, interaction.channel.id)
-    enable_posting(interaction.guild.id)
+    await save_config(interaction.guild.id, interaction.channel.id)
+    await enable_posting(interaction.guild.id)
     await interaction.response.send_message(f"Setup complete for <#{interaction.channel.id}>.", ephemeral=True)
 
 @tree.command(name="nextterm", description="Send a new brevity term immediately.")
@@ -520,7 +534,7 @@ async def nextterm(interaction: discord.Interaction):
         logger.warning("Interaction expired before defer could happen.")
         return
 
-    term = get_next_brevity_term(interaction.guild.id)
+    term = await get_next_brevity_term(interaction.guild.id)
     if not term:
         await interaction.followup.send("No terms available.", ephemeral=True)
         return
@@ -530,7 +544,7 @@ async def nextterm(interaction: discord.Interaction):
         color=discord.Color.blue(),
         url=f"https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code#{term['term'][0]}"
     )
-    image_url = get_random_flickr_jet(FLICKR_API_KEY)
+    image_url = await get_random_flickr_jet(FLICKR_API_KEY)
     if image_url:
         embed.set_image(url=image_url)
     embed.set_footer(text="From Wikipedia – Multi-service Tactical Brevity Code")
@@ -544,7 +558,7 @@ async def reloadterms(interaction: discord.Interaction):
         logger.warning("Interaction expired before defer could happen.")
         return
 
-    total, added, updated = update_brevity_terms()
+    total, added, updated = await update_brevity_terms()
     await interaction.followup.send(
         f"Terms synced from Wiki. Added: {added}. Updated: {updated}. Total: {total}.", ephemeral=True
     )
@@ -552,7 +566,7 @@ async def reloadterms(interaction: discord.Interaction):
 
 
 async def autocomplete_terms(interaction: discord.Interaction, current: str):
-    all_terms = get_all_terms()
+    all_terms = await get_all_terms()
     if current.strip():
         # Filter terms based on user input
         filtered_terms = [
@@ -569,7 +583,7 @@ async def autocomplete_terms(interaction: discord.Interaction, current: str):
 @app_commands.describe(term="The brevity term to define")
 @app_commands.autocomplete(term=autocomplete_terms)
 async def define(interaction: discord.Interaction, term: str):
-    entry = get_brevity_term_by_name(term)
+    entry = await get_brevity_term_by_name(term)
     if not entry:
         await interaction.response.send_message(f"No definition found for '{term}'.", ephemeral=True)
         return
@@ -587,17 +601,17 @@ async def setfrequency(interaction: discord.Interaction, hours: int):
     if hours <= 0:
         await interaction.response.send_message("Frequency must be a positive integer.", ephemeral=True)
         return
-    set_post_frequency(interaction.guild.id, hours)
+    await set_post_frequency(interaction.guild.id, hours)
     await interaction.response.send_message(f"Frequency set to {hours} hour(s).", ephemeral=True)
 
 @tree.command(name="disableposting", description="Stop scheduled brevity term posts in this server.")
 async def disableposting(interaction: discord.Interaction):
-    disable_posting(interaction.guild.id)
+    await disable_posting(interaction.guild.id)
     await interaction.response.send_message("Scheduled posting disabled.", ephemeral=True)
 
 @tree.command(name="enableposting", description="Resume scheduled brevity term posts in this server.")
 async def enableposting(interaction: discord.Interaction):
-    enable_posting(interaction.guild.id)
+    await enable_posting(interaction.guild.id)
     await interaction.response.send_message("Scheduled posting enabled.", ephemeral=True)
 
 class PublicQuizView(discord.ui.View):
@@ -613,7 +627,7 @@ class PublicQuizView(discord.ui.View):
         user_id = str(interaction.user.id)
         # Allow users to change their vote: always write the latest selection to Redis.
         try:
-            self.redis_conn.hset(f"quiz:{self.quiz_id}:answers:{self.question_idx}", user_id, answer_idx)
+            await self.redis_conn.hset(f"quiz:{self.quiz_id}:answers:{self.question_idx}", user_id, answer_idx)
         except Exception:
             # Best-effort: ignore storage errors so we don't block the interaction
             logger.exception("Failed to record vote for quiz %s q=%s user=%s", self.quiz_id, self.question_idx, user_id)
@@ -653,7 +667,7 @@ async def quiz(
     duration: int = 2
 ):
     logger.info(f"/quiz invoked by user={interaction.user.id} guild={interaction.guild_id} questions={questions} mode={mode} duration={duration}")
-    all_terms = get_all_terms()
+    all_terms = await get_all_terms()
     max_questions = len(all_terms)
     if max_questions < 4:
         await interaction.response.send_message("Not enough terms to generate a quiz.", ephemeral=True)
@@ -1001,7 +1015,7 @@ async def quiz(
         user_correct = {}  # user_id -> correct count for this quiz
         user_participation = set()
         for i, view in enumerate(views):
-            answers = r.hgetall(f"quiz:{quiz_id}:answers:{i}")
+            answers = await r.hgetall(f"quiz:{quiz_id}:answers:{i}")
             logger.info(f"Fetched answers for quiz_id={quiz_id} q_index={i} count={len(answers)}")
             correct_users = [uid for uid, idx in answers.items() if str(idx) == str(view.correct_idx)]
             for uid, idx in answers.items():
@@ -1026,6 +1040,8 @@ async def quiz(
                 
             field_value = f"**Answer:**  **`{option_labels[view.correct_idx]}`** - {correct_answer_text}\n **Correct users:** {correct_mentions}\n"
             results_embed.add_field(name=field_name, value=field_value, inline=False)
+            # Yield control periodically
+            await asyncio.sleep(0)
 
         # Save each user's result to Redis (capped at 10)
         total = len(views)
@@ -1033,9 +1049,10 @@ async def quiz(
             correct = user_correct.get(uid, 0)
             entry = json.dumps({"correct": correct, "total": total, "ts": int(time.time())})
             key = f"greenie:{interaction.guild_id}:{uid}"
-            r.lpush(key, entry)
-            r.ltrim(key, 0, 9)  # Keep only last 10
+            await r.lpush(key, entry)
+            await r.ltrim(key, 0, 9)  # Keep only last 10
             logger.info(f"Saved greenie entry for guild={interaction.guild_id} user={uid} -> {correct}/{total}")
+            await asyncio.sleep(0)
 
         # Per-quiz leaderboard -> add as an embed field
         if user_correct:
@@ -1052,14 +1069,15 @@ async def quiz(
             results_embed.add_field(name="Quiz Leaderboard", value="No correct answers this round.", inline=False)
 
         # Greenie Board (last 10 quizzes, 10 most recent users) -> add as an embed field
-        greenie_keys = r.keys(f"greenie:{interaction.guild_id}:*")
+        greenie_keys = await r.keys(f"greenie:{interaction.guild_id}:*")
         user_greenies = []
         for key in greenie_keys:
             uid = key.split(":")[-1]
-            entries = [json.loads(e) for e in r.lrange(key, 0, 9)]
+            entries = [json.loads(e) for e in await r.lrange(key, 0, 9)]
             if entries:
                 avg = sum(e["correct"] / e["total"] for e in entries) / len(entries)
                 user_greenies.append((uid, entries, avg))
+            await asyncio.sleep(0)
         user_greenies.sort(key=lambda x: (-x[2], -max(e["ts"] for e in x[1])))
         # Use the shared builder so the output matches /greenieboard exactly.
         # Insert the board INTO the results embed as a code-block field.
@@ -1082,14 +1100,15 @@ async def quiz(
 @tree.command(name="greenieboard", description="Show the Greenie Board for this server (last 10 quizzes per user)")
 async def greenieboard(interaction: discord.Interaction):
     guild_id = interaction.guild_id
-    greenie_keys = r.keys(f"greenie:{guild_id}:*")
+    greenie_keys = await r.keys(f"greenie:{guild_id}:*")
     user_greenies = []
     for key in greenie_keys:
         uid = key.split(":")[-1]
-        entries = [json.loads(e) for e in r.lrange(key, 0, 9)]
+        entries = [json.loads(e) for e in await r.lrange(key, 0, 9)]
         if entries:
             avg = sum(e["correct"] / e["total"] for e in entries) / len(entries)
             user_greenies.append((uid, entries, avg))
+        await asyncio.sleep(0)
     user_greenies.sort(key=lambda x: (-x[2], -max(e["ts"] for e in x[1])))
     try:
         board_text = await build_greenie_board_text(interaction.guild, user_greenies)
@@ -1237,15 +1256,15 @@ async def checkperms(interaction: discord.Interaction):
 # -------------------------------
 @tasks.loop(minutes=5)
 async def post_brevity_term():
-    all_configs = load_config()
+    all_configs = await load_config()
     for guild_id_str, config in all_configs.items():
         try:
             guild_id = int(guild_id_str)
-            if not is_posting_enabled(guild_id):
+            if not await is_posting_enabled(guild_id):
                 continue
 
-            freq_hours = get_post_frequency(guild_id)
-            last_posted = get_last_posted(guild_id)
+            freq_hours = await get_post_frequency(guild_id)
+            last_posted = await get_last_posted(guild_id)
             next_post_time = last_posted + (freq_hours * 3600)
 
             # Check if it's time to post (allowing a ±5-minute window)
@@ -1256,10 +1275,10 @@ async def post_brevity_term():
             channel = client.get_channel(config["channel_id"])
             if not channel:
                 logger.warning("Channel %s not found for guild %s. Removing stale config.", config['channel_id'], guild_id)
-                r.hdel(CHANNEL_MAP_KEY, str(guild_id))
+                await r.hdel(CHANNEL_MAP_KEY, str(guild_id))
                 continue
 
-            term = get_next_brevity_term(guild_id)
+            term = await get_next_brevity_term(guild_id)
             if not term:
                 continue
 
@@ -1269,7 +1288,7 @@ async def post_brevity_term():
                 color=discord.Color.blue(),
                 url=f"https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code#{term['term'][0]}"
             )
-            image_url = get_random_flickr_jet(FLICKR_API_KEY)
+            image_url = await get_random_flickr_jet(FLICKR_API_KEY)
             if image_url:
                 embed.set_image(url=image_url)
             embed.set_footer(text="From Wikipedia – Multi-service Tactical Brevity Code")
@@ -1277,7 +1296,7 @@ async def post_brevity_term():
             await channel.send(embed=embed)
             # Record the actual post time so future scheduling is based on when
             # the term was sent, not when it was supposed to be sent.
-            set_last_posted(guild_id, time.time())
+            await set_last_posted(guild_id, time.time())
             logger.info("Posted term '%s' to guild %s (#%s)", term['term'], guild_id, config["channel_id"])
 
         except Exception as e:
@@ -1286,13 +1305,13 @@ async def post_brevity_term():
 
 @tasks.loop(hours=24)
 async def refresh_terms_daily():
-    update_brevity_terms()
+    await update_brevity_terms()
 
 @tasks.loop(hours=1)
 async def log_bot_stats():
     num_servers = len(client.guilds)
-    total_words = int(r.get("total_words") or 0)
-    command_usage = json.loads(r.get("command_usage") or "{}")
+    total_words = int(await r.get("total_words") or 0)
+    command_usage = json.loads(await r.get("command_usage") or "{}")
 
     # Format command usage stats
     command_usage_stats = ", ".join([f"{cmd}: {count}" for cmd, count in command_usage.items()])
@@ -1308,6 +1327,14 @@ async def log_bot_stats():
 # -------------------------------
 @client.event
 async def on_ready():
+    global r
+    # Initialize async Redis connection
+    r = await aioredis.from_url(
+        redis_url,
+        decode_responses=True
+    )
+    logger.info("Connected to Redis at %s:%s", parsed_url.hostname, parsed_url.port)
+    
     logger.info("Logged in as %s (ID: %s)", client.user.name, client.user.id)
     await tree.sync()
     if not post_brevity_term.is_running():
@@ -1327,11 +1354,11 @@ if __name__ == "__main__":
 async def on_guild_remove(guild):
     guild_id = guild.id
     logger.info("Removed from guild %s (%s). Cleaning up Redis data...", guild_id, guild.name)
-    r.hdel(CHANNEL_MAP_KEY, str(guild_id))
-    r.delete(f"used_terms:{guild_id}")
-    r.delete(f"{FREQ_KEY_PREFIX}{guild_id}")
-    r.delete(f"{LAST_POSTED_KEY_PREFIX}{guild_id}")
-    r.srem(DISABLED_GUILDS_KEY, str(guild_id))
+    await r.hdel(CHANNEL_MAP_KEY, str(guild_id))
+    await r.delete(f"used_terms:{guild_id}")
+    await r.delete(f"{FREQ_KEY_PREFIX}{guild_id}")
+    await r.delete(f"{LAST_POSTED_KEY_PREFIX}{guild_id}")
+    await r.srem(DISABLED_GUILDS_KEY, str(guild_id))
 
 
 class PublicQuizView(discord.ui.View):
@@ -1346,18 +1373,19 @@ class PublicQuizView(discord.ui.View):
     async def on_timeout(self):
         correct_users = [uid for uid, idx in self.votes.items() if idx == self.correct_idx]
         key = f"quiz_results:{self.message_id}"
-        r.set(key, json.dumps({
+        await r.set(key, json.dumps({
             "correct_idx": self.correct_idx,
             "votes": self.votes
         }))
-        r.expire(key, 6 * 3600)
+        await r.expire(key, 6 * 3600)
 
         for uid, idx in self.votes.items():
             score_key = f"user_score:{uid}"
-            prev = json.loads(r.get(score_key) or '{"correct": 0, "total": 0}')
+            prev_json = await r.get(score_key)
+            prev = json.loads(prev_json or '{"correct": 0, "total": 0}')
             prev["correct"] += int(idx == self.correct_idx)
             prev["total"] += 1
-            r.set(score_key, json.dumps(prev))
+            await r.set(score_key, json.dumps(prev))
 
         correct_mentions = ", ".join(f"<@{uid}>" for uid in correct_users) or "None"
         answer_text = (
