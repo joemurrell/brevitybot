@@ -1101,7 +1101,6 @@ async def quiz(
         logger.info(f"Sending summary embed for quiz_id={quiz_id} to channel={interaction.channel.id}")
         await interaction.channel.send(embed=results_embed)
     # Schedule the summary task
-    import asyncio
     asyncio.create_task(close_and_summarize())
 # Greenie Board command
 @tree.command(name="greenieboard", description="Show the Greenie Board for this server (last 10 quizzes per user)")
