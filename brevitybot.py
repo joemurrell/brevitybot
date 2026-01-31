@@ -1099,7 +1099,29 @@ async def quiz(
         except Exception:
             logger.exception("Failed to build greenie board during quiz summary")
         logger.info(f"Sending summary embed for quiz_id={quiz_id} to channel={interaction.channel.id}")
-        await interaction.channel.send(embed=results_embed)
+        
+        # Send the results embed with error handling for permission issues
+        try:
+            await interaction.channel.send(embed=results_embed)
+            logger.info(f"Successfully posted quiz results for quiz_id={quiz_id}")
+        except Exception as e:
+            # Log the error with context
+            logger.error("Failed to post quiz results to channel=%s guild=%s quiz_id=%s: %s", 
+                        getattr(interaction.channel, 'id', None), 
+                        getattr(interaction, 'guild_id', None),
+                        quiz_id, e)
+            
+            # Detect if it's a Forbidden (missing access) error
+            is_forbidden = False
+            try:
+                is_forbidden = isinstance(e, discord.Forbidden)
+            except Exception:
+                is_forbidden = e.__class__.__name__ == 'Forbidden'
+            
+            if is_forbidden:
+                logger.error("Bot lacks permissions to post quiz results. Required permissions: View Channels, Send Messages, Embed Links")
+            else:
+                logger.exception("Unexpected error posting quiz results")
     # Schedule the summary task
     asyncio.create_task(close_and_summarize())
 # Greenie Board command
