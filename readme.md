@@ -1,6 +1,6 @@
-# Brevity Bot
+# BrevityBot
 
-**Brevity Bot** is a Discord bot that posts tactical brevity codes used in military aviation, complete with definitions and optional images. It automatically fetches terms from Wikipedia and posts them on a custom schedule per server.
+**BrevityBot** is a Discord bot that posts tactical brevity codes used in military aviation, complete with definitions and optional images. It automatically fetches terms from Wikipedia and posts them on a custom schedule per server.
 
 ## Features
 
