@@ -4,6 +4,7 @@ from discord import app_commands
 import os
 import random
 import aiohttp
+import aiohttp.web
 from bs4 import BeautifulSoup
 import re
 import logging
