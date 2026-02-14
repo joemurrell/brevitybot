@@ -110,6 +110,37 @@ r = None
 logger.info("Redis URL configured for %s:%s", parsed_url.hostname, parsed_url.port)
 
 # -------------------------------
+# HEALTH CHECK SERVER
+# -------------------------------
+HEALTH_CHECK_PORT = int(os.getenv("HEALTH_CHECK_PORT", "8080"))
+
+async def health_check_handler(request):
+    """HTTP health check endpoint. Returns 200 if the bot is connected to Discord, 503 otherwise."""
+    if client.is_ready() and not client.is_closed():
+        latency_ms = round(client.latency * 1000)
+        return aiohttp.web.json_response({
+            "status": "healthy",
+            "bot": str(client.user),
+            "guilds": len(client.guilds),
+            "latency_ms": latency_ms,
+        })
+    return aiohttp.web.json_response(
+        {"status": "unhealthy", "reason": "Bot not connected to Discord"},
+        status=503,
+    )
+
+async def start_health_check_server():
+    """Start a lightweight HTTP server for Railway health checks."""
+    app = aiohttp.web.Application()
+    app.router.add_get("/health", health_check_handler)
+    app.router.add_get("/", health_check_handler)
+    runner = aiohttp.web.AppRunner(app)
+    await runner.setup()
+    site = aiohttp.web.TCPSite(runner, "0.0.0.0", HEALTH_CHECK_PORT)
+    await site.start()
+    logger.info("Health check server running on port %d", HEALTH_CHECK_PORT)
+
+# -------------------------------
 # CONSTANTS
 # -------------------------------
 TERMS_KEY = "brevity_terms"
@@ -1387,6 +1418,9 @@ async def on_ready():
         refresh_terms_daily.start()
     if not log_bot_stats.is_running():
         log_bot_stats.start()
+
+    # Start health check HTTP server for Railway
+    await start_health_check_server()
 
 
 if __name__ == "__main__":
