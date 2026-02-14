@@ -784,52 +784,53 @@ async def quiz(
                     term = opt.get("term", "")
                     opt["display"] = term  # store for later reference
                     embed.add_field(name="", value=f"**`{option_labels[idx]}`** {term}", inline=False)
-                embed.set_footer(text=f"Question {q_idx+1} of {questions}")
-                embed.timestamp = discord.utils.utcnow()
-                class QuizView(discord.ui.View):
-                    def __init__(self, options):
-                        super().__init__(timeout=60)
-                        self.options = options
-                    @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
-                    async def optionA(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
-                        await self.handle_answer(interaction_btn, 0)
-                    @discord.ui.button(label="B", style=discord.ButtonStyle.primary)
-                    async def optionB(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
-                        await self.handle_answer(interaction_btn, 1)
-                    @discord.ui.button(label="C", style=discord.ButtonStyle.primary)
-                    async def optionC(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
-                        await self.handle_answer(interaction_btn, 2)
-                    @discord.ui.button(label="D", style=discord.ButtonStyle.primary)
-                    async def optionD(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
-                        await self.handle_answer(interaction_btn, 3)
-                    async def handle_answer(self, interaction_btn, idx):
-                        if interaction_btn.user.id != interaction.user.id:
-                            await interaction_btn.response.send_message("This quiz is not for you!", ephemeral=True)
-                            return
-                        if self.options[idx]["is_correct"]:
-                            if question_type == "term_to_definition":
-                                msg = f"✅ Correct! {option_labels[idx]}. {self.options[idx]['definition']}"
-                            else:
-                                msg = f"✅ Correct! {option_labels[idx]}. {self.options[idx]['term']}"
-                            score["correct"] += 1
+            
+            embed.set_footer(text=f"Question {q_idx+1} of {questions}")
+            embed.timestamp = discord.utils.utcnow()
+            
+            class QuizView(discord.ui.View):
+                def __init__(self, options):
+                    super().__init__(timeout=60)
+                    self.options = options
+                @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
+                async def optionA(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+                    await self.handle_answer(interaction_btn, 0)
+                @discord.ui.button(label="B", style=discord.ButtonStyle.primary)
+                async def optionB(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+                    await self.handle_answer(interaction_btn, 1)
+                @discord.ui.button(label="C", style=discord.ButtonStyle.primary)
+                async def optionC(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+                    await self.handle_answer(interaction_btn, 2)
+                @discord.ui.button(label="D", style=discord.ButtonStyle.primary)
+                async def optionD(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+                    await self.handle_answer(interaction_btn, 3)
+                async def handle_answer(self, interaction_btn, idx):
+                    if interaction_btn.user.id != interaction.user.id:
+                        await interaction_btn.response.send_message("This quiz is not for you!", ephemeral=True)
+                        return
+                    if self.options[idx]["is_correct"]:
+                        if question_type == "term_to_definition":
+                            msg = f"✅ Correct! {option_labels[idx]}. {self.options[idx]['definition']}"
                         else:
-                            correct_idx = next(i for i, o in enumerate(self.options) if o["is_correct"])
-                            if question_type == "term_to_definition":
-                                msg = f"❌ Incorrect. The correct answer was {option_labels[correct_idx]}: {self.options[correct_idx]['definition']}"
-                            else:
-                                msg = f"❌ Incorrect. The correct answer was {option_labels[correct_idx]}: {self.options[correct_idx]['term']}"
-                        await interaction_btn.response.send_message(msg, ephemeral=True)
-                        self.stop()
-                        if q_idx + 1 < questions:
-                            await ask_question(q_idx + 1)
+                            msg = f"✅ Correct! {option_labels[idx]}. {self.options[idx]['term']}"
+                        score["correct"] += 1
+                    else:
+                        correct_idx = next(i for i, o in enumerate(self.options) if o["is_correct"])
+                        if question_type == "term_to_definition":
+                            msg = f"❌ Incorrect. The correct answer was {option_labels[correct_idx]}: {self.options[correct_idx]['definition']}"
                         else:
-                            await interaction.followup.send(f"Quiz complete! You got {score['correct']} out of {score['total']} correct.", ephemeral=True)
-                if q_idx == 0:
-                    await interaction.response.send_message(embed=embed, view=QuizView(options), ephemeral=True)
-                else:
-                    await interaction.followup.send(embed=embed, view=QuizView(options), ephemeral=True)
+                            msg = f"❌ Incorrect. The correct answer was {option_labels[correct_idx]}: {self.options[correct_idx]['term']}"
+                    await interaction_btn.response.send_message(msg, ephemeral=True)
+                    self.stop()
+                    if q_idx + 1 < questions:
+                        await ask_question(q_idx + 1)
+                    else:
+                        await interaction.followup.send(f"Quiz complete! You got {score['correct']} out of {score['total']} correct.", ephemeral=True)
+            
+            if q_idx == 0:
+                await interaction.response.send_message(embed=embed, view=QuizView(options), ephemeral=True)
             else:
-                await interaction.followup.send("Private quizzes are not supported in this version.", ephemeral=True)
+                await interaction.followup.send(embed=embed, view=QuizView(options), ephemeral=True)
         await ask_question(0)
         return
 
@@ -1129,9 +1130,30 @@ async def quiz(
         except Exception:
             logger.exception("Failed to build greenie board during quiz summary")
         logger.info(f"Sending summary embed for quiz_id={quiz_id} to channel={interaction.channel.id}")
-        await interaction.channel.send(embed=results_embed)
+        
+        # Send the results embed with error handling for permission issues
+        try:
+            await interaction.channel.send(embed=results_embed)
+            logger.info(f"Successfully posted quiz results for quiz_id={quiz_id}")
+        except Exception as e:
+            # Log the error with context
+            logger.error("Failed to post quiz results to channel=%s guild=%s quiz_id=%s: %s", 
+                        getattr(interaction.channel, 'id', None), 
+                        getattr(interaction, 'guild_id', None),
+                        quiz_id, e)
+            
+            # Detect if it's a Forbidden (missing access) error
+            is_forbidden = False
+            try:
+                is_forbidden = isinstance(e, discord.Forbidden)
+            except Exception:
+                is_forbidden = e.__class__.__name__ == 'Forbidden'
+            
+            if is_forbidden:
+                logger.error("Bot lacks permissions to post quiz results. Required permissions: View Channels, Send Messages, Embed Links")
+            else:
+                logger.exception("Unexpected error posting quiz results")
     # Schedule the summary task
-    import asyncio
     asyncio.create_task(close_and_summarize())
 # Greenie Board command
 @tree.command(name="greenieboard", description="Show the Greenie Board for this server (last 10 quizzes per user)")
