@@ -205,6 +205,13 @@ async def is_posting_enabled(guild_id):
 
 async def enable_posting(guild_id):
     await r.srem(DISABLED_GUILDS_KEY, str(guild_id))
+    
+    # Initialize last_posted if not set, so the first post happens after the configured interval
+    last_posted = await get_last_posted(guild_id)
+    if last_posted < 1577836800:  # Uninitialized (before Jan 1, 2020)
+        await set_last_posted(guild_id, time.time())
+        logger.info("Initialized last_posted for guild %s", guild_id)
+    
     logger.info("Posting enabled for guild %s", guild_id)
 
 async def disable_posting(guild_id):
@@ -556,6 +563,8 @@ async def get_brevity_term_by_name(name):
 async def setup(interaction: discord.Interaction):
     await save_config(interaction.guild.id, interaction.channel.id)
     await enable_posting(interaction.guild.id)
+    # Initialize last_posted so first post happens after the configured interval
+    await set_last_posted(interaction.guild.id, time.time())
     await interaction.response.send_message(f"Setup complete for <#{interaction.channel.id}>.", ephemeral=True)
 
 @tree.command(name="nextterm", description="Send a new brevity term immediately.")
@@ -1325,11 +1334,19 @@ async def post_brevity_term():
 
             freq_hours = await get_post_frequency(guild_id)
             last_posted = await get_last_posted(guild_id)
-            next_post_time = last_posted + (freq_hours * 3600)
+            
+            # Handle uninitialized or invalid last_posted timestamp
+            # If last_posted is 0 or before Jan 1, 2020, treat as uninitialized
+            if last_posted < 1577836800:  # Jan 1, 2020 timestamp
+                logger.info("Uninitialized last_posted for guild %s, posting immediately", guild_id)
+                # Post immediately by setting next_post_time to now
+                next_post_time = time.time()
+            else:
+                next_post_time = last_posted + (freq_hours * 3600)
 
             # Check if it's time to post (allowing a ±5-minute window)
             current_time = time.time()
-            if current_time < next_post_time - 300 or current_time > next_post_time + 300:
+            if current_time < next_post_time - 300:
                 continue
 
             channel = client.get_channel(config["channel_id"])
