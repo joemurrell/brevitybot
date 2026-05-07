@@ -303,7 +303,37 @@ def sanitize_definition_for_quiz(defn: str, term: str, min_len: int = 15) -> str
         return first if len(first) >= 5 else '[definition omitted for quiz]'
 
     return s
-    
+
+
+def pick_single_definition(defn: str) -> str:
+    """Return a single definition string for use in a quiz prompt or option.
+
+    Some Wikipedia entries pack multiple meanings into one definition (e.g.
+    "1. Foo something. 2. Bar something else."). This helper splits those
+    numbered variants and returns one at random. Falls back to picking a
+    non-empty line, and finally to returning the input unchanged.
+    """
+    if not defn:
+        return defn
+    defn = defn.strip()
+    parts = re.split(r"\d+\.\s*|\d+\)\s*", defn)
+    parts = [p.strip() for p in parts if p.strip()]
+    good_parts = []
+    for p in parts:
+        cleaned = re.sub(r"^[\s\-\(\)\.]*\d*[\)\.\-]*\s*", "", p).strip()
+        if re.search(r"[A-Za-z]", cleaned) and len(cleaned) >= 5:
+            good_parts.append(cleaned)
+    if len(good_parts) > 1:
+        return random.choice(good_parts)
+    if len(good_parts) == 1:
+        return good_parts[0]
+    lines = [l.strip() for l in defn.splitlines() if l.strip()]
+    good_lines = [l for l in lines if re.search(r"[A-Za-z]", l) and len(l) >= 5]
+    if good_lines:
+        return random.choice(good_lines)
+    return defn
+
+
 async def parse_brevity_terms():
 
     url = "https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code"
@@ -656,19 +686,26 @@ async def enableposting(interaction: discord.Interaction):
     await interaction.response.send_message("Scheduled posting enabled.", ephemeral=True)
 
 class PublicQuizView(discord.ui.View):
-    def __init__(self, question_idx, correct_idx, quiz_id, redis_conn, timeout=None):
+    def __init__(self, question_idx, correct_idx, quiz_id, redis_conn, ttl_seconds, timeout=None):
         super().__init__(timeout=timeout)
         self.question_idx = question_idx
         self.correct_idx = correct_idx
         self.quiz_id = quiz_id
         self.redis_conn = redis_conn
+        # TTL on the answer hash so a bot crash mid-quiz doesn't leak the key forever.
+        self.ttl_seconds = ttl_seconds
         self.answered_users = set()
 
     async def handle_vote(self, interaction, answer_idx):
         user_id = str(interaction.user.id)
         # Allow users to change their vote: always write the latest selection to Redis.
+        # Pipeline hset + expire so orphaned answer keys eventually expire.
         try:
-            await self.redis_conn.hset(f"quiz:{self.quiz_id}:answers:{self.question_idx}", user_id, answer_idx)
+            key = f"quiz:{self.quiz_id}:answers:{self.question_idx}"
+            async with self.redis_conn.pipeline(transaction=False) as pipe:
+                pipe.hset(key, user_id, answer_idx)
+                pipe.expire(key, self.ttl_seconds)
+                await pipe.execute()
         except Exception:
             # Best-effort: ignore storage errors so we don't block the interaction
             logger.exception("Failed to record vote for quiz %s q=%s user=%s", self.quiz_id, self.question_idx, user_id)
@@ -708,33 +745,36 @@ async def quiz(
     duration: int = 2
 ):
     logger.info(f"/quiz invoked by user={interaction.user.id} guild={interaction.guild_id} questions={questions} mode={mode} duration={duration}")
+
+    # Defer immediately so we never miss Discord's 3-second response deadline.
+    # Private mode replies ephemerally; public mode replies in-channel.
+    is_private = mode != "public"
+    try:
+        await interaction.response.defer(ephemeral=is_private, thinking=True)
+    except discord.NotFound:
+        logger.warning("Interaction expired before defer could happen.")
+        return
+
     all_terms = await get_all_terms()
     max_questions = len(all_terms)
     if max_questions < 4:
-        await interaction.response.send_message("Not enough terms to generate a quiz.", ephemeral=True)
+        await interaction.followup.send("Not enough terms to generate a quiz.", ephemeral=True)
         return
     if questions < 1 or questions > max_questions:
-        await interaction.response.send_message(f"Number of questions must be between 1 and {max_questions}.", ephemeral=True)
+        await interaction.followup.send(f"Number of questions must be between 1 and {max_questions}.", ephemeral=True)
         return
 
     quiz_terms = random.sample(all_terms, questions)
     score = {"correct": 0, "total": questions}
 
     if mode == "private":
-        async def ask_question(q_idx):
+        async def ask_question(q_idx, parent_interaction=None):
+            # parent_interaction carries forward each button-click's interaction so
+            # subsequent questions use a fresh 15-minute token instead of the
+            # original slash-command interaction (which would expire on long quizzes).
+            parent = parent_interaction or interaction
             current = quiz_terms[q_idx]
             correct_term = current["term"]
-            def pick_single_definition(defn):
-                defn = defn.strip()
-                if re.match(r"^1\\. ", defn):
-                    parts = re.split(r"\\d+\\. ", defn)
-                    for part in parts:
-                        if part.strip():
-                            return part.strip()
-                for line in defn.split("\n"):
-                    if line.strip():
-                        return line.strip()
-                return defn
             correct_def = pick_single_definition(current["definition"])
             
             # Randomly choose question type: "term_to_definition" or "definition_to_term" 
@@ -800,7 +840,7 @@ async def quiz(
             
             class QuizView(discord.ui.View):
                 def __init__(self, options):
-                    super().__init__(timeout=60)
+                    super().__init__(timeout=300)
                     self.options = options
                 @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
                 async def optionA(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
@@ -833,14 +873,13 @@ async def quiz(
                     await interaction_btn.response.send_message(msg, ephemeral=True)
                     self.stop()
                     if q_idx + 1 < questions:
-                        await ask_question(q_idx + 1)
+                        # Pass the button's interaction forward so the next question
+                        # is sent through a fresh 15-minute token.
+                        await ask_question(q_idx + 1, parent_interaction=interaction_btn)
                     else:
-                        await interaction.followup.send(f"Quiz complete! You got {score['correct']} out of {score['total']} correct.", ephemeral=True)
-            
-            if q_idx == 0:
-                await interaction.response.send_message(embed=embed, view=QuizView(options), ephemeral=True)
-            else:
-                await interaction.followup.send(embed=embed, view=QuizView(options), ephemeral=True)
+                        await interaction_btn.followup.send(f"Quiz complete! You got {score['correct']} out of {score['total']} correct.", ephemeral=True)
+
+            await parent.followup.send(embed=embed, view=QuizView(options), ephemeral=True)
         await ask_question(0)
         return
 
@@ -856,39 +895,6 @@ async def quiz(
     option_labels = ["A", "B", "C", "D"]
     for q_idx, current in enumerate(quiz_terms):
         correct_term = current["term"]
-        def pick_single_definition(defn):
-            """Return a single definition string.
-            If the definition contains numbered variants (e.g. "1. ... 2. ..."),
-            split them and return a randomly chosen variant. Otherwise fall back
-            to choosing a non-empty line or the whole definition.
-            """
-            defn = defn.strip()
-            # Split numbered variants like '1. ... 2. ...' or '1) ... 2) ...'
-            parts = re.split(r"\d+\.\s*|\d+\)\s*", defn)
-            parts = [p.strip() for p in parts if p.strip()]
-            # Clean and keep only parts that contain letters (avoid numeric-only fragments)
-            good_parts = []
-            for p in parts:
-                # remove stray leading bullets or remaining digits, but KEEP leading '[' characters
-                # (some definitions are bracketed like '[state system] ...' and the '[' is meaningful)
-                cleaned = re.sub(r"^[\s\-\(\)\.]*\d*[\)\.\-]*\s*", "", p).strip()
-                if re.search(r"[A-Za-z]", cleaned) and len(cleaned) >= 5:
-                    good_parts.append(cleaned)
-            if len(good_parts) > 1:
-                chosen = random.choice(good_parts)
-                logger.info(f"Picked numbered variant: {chosen[:80]}")
-                return chosen
-            # If we found exactly one reasonable part, use it
-            if len(good_parts) == 1:
-                return good_parts[0]
-            # Fallback: split by non-empty lines and pick one that contains letters
-            lines = [l.strip() for l in defn.splitlines() if l.strip()]
-            good_lines = [l for l in lines if re.search(r"[A-Za-z]", l) and len(l) >= 5]
-            if len(good_lines) >= 1:
-                chosen = random.choice(good_lines)
-                logger.info(f"Picked line-variant: {chosen[:80]}")
-                return chosen
-            return defn
         correct_def = pick_single_definition(current["definition"])
         
         # Randomly choose question type: "term_to_definition" or "definition_to_term" 
@@ -952,7 +958,9 @@ async def quiz(
                 opt["display"] = term
                 embed.add_field(name="", value=f"**`{label}`** {term}", inline=False)
         embed.set_footer(text=f"Question {q_idx+1} of {questions} • Quiz initiated by {interaction.user.display_name}")
-        view = PublicQuizView(q_idx, correct_idx, quiz_id, r, timeout=duration*60)
+        # ttl outlives the quiz duration by 1h so a slightly delayed summary still
+        # finds the keys; close_and_summarize will delete them on success anyway.
+        view = PublicQuizView(q_idx, correct_idx, quiz_id, r, ttl_seconds=duration*60 + 3600, timeout=duration*60)
         embeds.append(embed)
         views.append(view)
         used_options.append(options)
@@ -963,12 +971,9 @@ async def quiz(
     # Defensive checks before sending to capture permission issues early
     if channel is None:
         logger.error("interaction.channel is None for guild=%s user=%s", interaction.guild_id, interaction.user.id)
-        await interaction.response.send_message("Couldn't determine the channel to post the quiz in. Please run this command in a server text channel.", ephemeral=True)
+        await interaction.followup.send("Couldn't determine the channel to post the quiz in. Please run this command in a server text channel.", ephemeral=True)
         return
 
-    # We'll attempt to announce and post followups; rely on try/except to surface permission errors
-
-    # Announce the quiz first via the interaction response (so followups are allowed)
     minute_label = "minute" if duration == 1 else "minutes"
     question_label = "question" if questions == 1 else "questions"
     start_embed = discord.Embed(
@@ -978,18 +983,16 @@ async def quiz(
     )
     start_embed.set_footer(text=f"Quiz initiated by {interaction.user.display_name}")
 
-    # Send the start embed as the interaction response so we can post followups
+    # Response slot was consumed by the defer at the top, so always use followup.
     try:
-        await interaction.response.send_message(embed=start_embed, ephemeral=False)
+        await interaction.followup.send(embed=start_embed, ephemeral=False)
     except Exception as e:
-        logger.error("Failed to send start embed response: %s", e)
-        # Fall back to attempting to send as a followup (if response used elsewhere)
+        logger.error("Failed to send start embed: %s", e)
         try:
-            await interaction.followup.send(embed=start_embed, ephemeral=False)
-        except Exception as e2:
-            logger.error("Also failed to send start embed as followup: %s", e2)
-            await interaction.response.send_message("Couldn't announce the quiz; check my permissions.", ephemeral=True)
-            return
+            await interaction.followup.send("Couldn't announce the quiz; check my permissions.", ephemeral=True)
+        except Exception:
+            logger.error("Also failed to send fallback ephemeral about start embed failure.")
+        return
 
     for idx, (embed, view) in enumerate(zip(embeds, views)):
         # Add a small delay between messages to avoid webhook rate limits (except for first message)
@@ -1034,12 +1037,9 @@ async def quiz(
                     "Check my role and channel permissions, and see the bot logs for details."
                 )
 
-            # Try to inform the user via the interaction response or followup
+            # Response was already deferred at the top, so always use followup.
             try:
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(user_msg, ephemeral=True)
-                else:
-                    await interaction.followup.send(user_msg, ephemeral=True)
+                await interaction.followup.send(user_msg, ephemeral=True)
             except Exception:
                 logger.error("Also failed to send ephemeral response to the user about missing access.")
             return
@@ -1163,6 +1163,17 @@ async def quiz(
                 logger.error("Bot lacks permissions to post quiz results. Required permissions: View Channels, Send Messages, Embed Links")
             else:
                 logger.exception("Unexpected error posting quiz results")
+
+        # Best-effort cleanup of per-question answer hashes. The TTL set by
+        # PublicQuizView is the safety net if this code never runs.
+        try:
+            answer_keys = [f"quiz:{quiz_id}:answers:{i}" for i in range(len(views))]
+            if answer_keys:
+                await r.delete(*answer_keys)
+                logger.info("Cleaned up %d answer keys for quiz_id=%s", len(answer_keys), quiz_id)
+        except Exception:
+            logger.exception("Failed to clean up answer keys for quiz_id=%s", quiz_id)
+
     # Schedule the summary task
     asyncio.create_task(close_and_summarize())
 # Greenie Board command
