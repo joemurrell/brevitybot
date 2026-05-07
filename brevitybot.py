@@ -171,8 +171,15 @@ async def load_used_terms(guild_id):
     return list(await r.smembers(f"used_terms:{guild_id}"))
 
 async def save_used_term(guild_id, term):
-    await r.sadd(f"used_terms:{guild_id}", term)
-    logger.info("Saved used term '%s' for guild %s", term, guild_id)
+    """Add a term to the used-set. Returns 1 if newly added, 0 if it was already there.
+
+    The return value lets concurrent callers detect when another worker
+    claimed the same term first (TOCTOU between read-used / pick-random / save).
+    """
+    added = await r.sadd(f"used_terms:{guild_id}", term)
+    if added:
+        logger.info("Saved used term '%s' for guild %s", term, guild_id)
+    return added
 
 async def save_config(guild_id, channel_id):
     await r.hset(CHANNEL_MAP_KEY, str(guild_id), channel_id)
@@ -452,13 +459,16 @@ async def update_brevity_terms():
     updated_terms = [term for term in new_terms if term['term'] in existing_terms_dict and term != existing_terms_dict[term['term']]]
     unchanged_terms = [term for term in new_terms if term['term'] in existing_terms_dict and term == existing_terms_dict[term['term']]]
 
-    # Backup current terms
+    # Atomically backup-then-replace so a crash mid-write can't leave us with
+    # the new TERMS_KEY but a stale (or missing) backup.
+    new_serialized = json.dumps(new_terms)
+    async with r.pipeline(transaction=True) as pipe:
+        if existing_raw:
+            pipe.set(f"{TERMS_KEY}_backup", existing_raw)
+        pipe.set(TERMS_KEY, new_serialized)
+        await pipe.execute()
     if existing_raw:
-        await r.set(f"{TERMS_KEY}_backup", existing_raw)
         logger.info("Backed up existing terms to TERMS_KEY_backup.")
-
-    # Update Redis with new terms
-    await r.set(TERMS_KEY, json.dumps(new_terms))
 
     logger.info(
         "Successfully loaded %d brevity terms. Added: %d, Updated: %d, Unchanged: %d.",
@@ -563,18 +573,26 @@ async def get_next_brevity_term(guild_id):
         logger.warning("No brevity terms available.")
         return None
 
-    used_terms = await load_used_terms(guild_id)
-    unused_terms = [t for t in all_terms if t["term"] not in used_terms]
+    # Retry loop guards against the read-pick-write race when /nextterm and the
+    # scheduled post run concurrently (or in a multi-instance deploy). SADD's
+    # return value is 1 when we won the race, 0 when another caller claimed it
+    # first; on a loss we re-read the used set and pick again.
+    max_attempts = 5
+    chosen = None
+    for _ in range(max_attempts):
+        used_terms = await load_used_terms(guild_id)
+        unused_terms = [t for t in all_terms if t["term"] not in used_terms]
+        if not unused_terms:
+            logger.info("All terms used for guild %s, resetting used terms.", guild_id)
+            await r.delete(f"used_terms:{guild_id}")
+            unused_terms = all_terms
 
-    if not unused_terms:
-        # All terms have been used — reset
-        logger.info("All terms used for guild %s, resetting used terms.", guild_id)
-        await r.delete(f"used_terms:{guild_id}")
-        used_terms = []
-        unused_terms = all_terms  # now full list again
+        chosen = random.choice(unused_terms)
+        if await save_used_term(guild_id, chosen["term"]):
+            return chosen
+        logger.debug("Lost race claiming term '%s' for guild %s; retrying.", chosen["term"], guild_id)
 
-    chosen = random.choice(unused_terms)
-    await save_used_term(guild_id, chosen["term"])
+    logger.warning("Exhausted race retries for guild %s; returning last picked term anyway.", guild_id)
     return chosen
 
 
@@ -1109,8 +1127,12 @@ async def quiz(
             correct = user_correct.get(uid, 0)
             entry = json.dumps({"correct": correct, "total": total, "ts": int(time.time())})
             key = f"greenie:{interaction.guild_id}:{uid}"
-            await r.lpush(key, entry)
-            await r.ltrim(key, 0, 9)  # Keep only last 10
+            # Pipeline so a concurrent reader can't observe an 11-entry list
+            # between LPUSH and LTRIM.
+            async with r.pipeline(transaction=True) as pipe:
+                pipe.lpush(key, entry)
+                pipe.ltrim(key, 0, 9)
+                await pipe.execute()
             logger.info(f"Saved greenie entry for guild={interaction.guild_id} user={uid} -> {correct}/{total}")
             await asyncio.sleep(0)
 
@@ -1129,7 +1151,8 @@ async def quiz(
             results_embed.add_field(name="Quiz Leaderboard", value="No correct answers this round.", inline=False)
 
         # Greenie Board (last 10 quizzes, 10 most recent users) -> add as an embed field
-        greenie_keys = await r.keys(f"greenie:{interaction.guild_id}:*")
+        # SCAN instead of KEYS so we don't block Redis on large keyspaces.
+        greenie_keys = [k async for k in r.scan_iter(match=f"greenie:{interaction.guild_id}:*", count=100)]
         user_greenies = []
         for key in greenie_keys:
             uid = key.split(":")[-1]
@@ -1193,7 +1216,8 @@ async def quiz(
 @app_commands.guild_only()
 async def greenieboard(interaction: discord.Interaction):
     guild_id = interaction.guild_id
-    greenie_keys = await r.keys(f"greenie:{guild_id}:*")
+    # SCAN instead of KEYS so we don't block Redis on large keyspaces.
+    greenie_keys = [k async for k in r.scan_iter(match=f"greenie:{guild_id}:*", count=100)]
     user_greenies = []
     for key in greenie_keys:
         uid = key.split(":")[-1]
