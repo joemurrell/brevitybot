@@ -76,10 +76,6 @@ Commands are synced globally in `on_ready()` with a 1-hour cooldown enforced via
 
 Every data access function takes a `guild_id` parameter. The `post_brevity_term` background task iterates all configured guilds from the `post_channels` hash. The scheduling window is ±5 minutes (the task loops every 5 minutes and posts if `current_time >= next_post_time - 300`).
 
-### Known issue
-
-`PublicQuizView` is defined twice in `brevitybot.py` (around line 658 and line 1490). The second definition (line 1490) overrides the first at runtime. The first definition is the one actually used by the `/quiz` public mode (it stores answers in Redis via `r.hset`); the second uses an in-memory `votes` dict and the `on_timeout` pattern. This is a bug — the second definition should be removed.
-
 ## Key conventions
 
 - All I/O is async/await — never use blocking calls (`requests`, `time.sleep`) inside coroutines except at startup before `client.run()`.

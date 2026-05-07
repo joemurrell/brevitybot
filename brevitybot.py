@@ -149,6 +149,7 @@ CHANNEL_MAP_KEY = "post_channels"
 FREQ_KEY_PREFIX = "post_freq:"
 LAST_POSTED_KEY_PREFIX = "last_posted:"
 DISABLED_GUILDS_KEY = "disabled_posting"
+WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code"
 
 # -------------------------------
 # DISCORD CLIENT
@@ -171,8 +172,15 @@ async def load_used_terms(guild_id):
     return list(await r.smembers(f"used_terms:{guild_id}"))
 
 async def save_used_term(guild_id, term):
-    await r.sadd(f"used_terms:{guild_id}", term)
-    logger.info("Saved used term '%s' for guild %s", term, guild_id)
+    """Add a term to the used-set. Returns 1 if newly added, 0 if it was already there.
+
+    The return value lets concurrent callers detect when another worker
+    claimed the same term first (TOCTOU between read-used / pick-random / save).
+    """
+    added = await r.sadd(f"used_terms:{guild_id}", term)
+    if added:
+        logger.info("Saved used term '%s' for guild %s", term, guild_id)
+    return added
 
 async def save_config(guild_id, channel_id):
     await r.hset(CHANNEL_MAP_KEY, str(guild_id), channel_id)
@@ -303,10 +311,40 @@ def sanitize_definition_for_quiz(defn: str, term: str, min_len: int = 15) -> str
         return first if len(first) >= 5 else '[definition omitted for quiz]'
 
     return s
-    
+
+
+def pick_single_definition(defn: str) -> str:
+    """Return a single definition string for use in a quiz prompt or option.
+
+    Some Wikipedia entries pack multiple meanings into one definition (e.g.
+    "1. Foo something. 2. Bar something else."). This helper splits those
+    numbered variants and returns one at random. Falls back to picking a
+    non-empty line, and finally to returning the input unchanged.
+    """
+    if not defn:
+        return defn
+    defn = defn.strip()
+    parts = re.split(r"\d+\.\s*|\d+\)\s*", defn)
+    parts = [p.strip() for p in parts if p.strip()]
+    good_parts = []
+    for p in parts:
+        cleaned = re.sub(r"^[\s\-\(\)\.]*\d*[\)\.\-]*\s*", "", p).strip()
+        if re.search(r"[A-Za-z]", cleaned) and len(cleaned) >= 5:
+            good_parts.append(cleaned)
+    if len(good_parts) > 1:
+        return random.choice(good_parts)
+    if len(good_parts) == 1:
+        return good_parts[0]
+    lines = [l.strip() for l in defn.splitlines() if l.strip()]
+    good_lines = [l for l in lines if re.search(r"[A-Za-z]", l) and len(l) >= 5]
+    if good_lines:
+        return random.choice(good_lines)
+    return defn
+
+
 async def parse_brevity_terms():
 
-    url = "https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code"
+    url = WIKIPEDIA_URL
     # Use a polite, identifiable User-Agent. Allow override via USER_AGENT env var.
     user_agent = os.getenv("USER_AGENT") or "BrevityBot/1.0 (+https://github.com/joemurrell/brevitybot)"
     headers = {"User-Agent": user_agent}
@@ -342,17 +380,28 @@ async def parse_brevity_terms():
     if status != 200:
         logger.error("Non-200 response while fetching brevity terms: %s", status)
         # still attempt to parse body if present
+    return _parse_terms_from_content(content or b"")
+
+
+def _parse_terms_from_content(content):
+    """Extract `[{term, definition}]` from a Wikipedia HTML page body.
+
+    Walks only <dl> blocks (definition lists) and stops at h2 headers like
+    "See also" or "References". Within each <dl>, iterates the DIRECT
+    <dt>/<dd> children — so a nested <dl> never gets double-counted, and
+    a stray <ul>/<ol> outside any <dl> can never be glued onto the previous
+    term's definition. Lists nested inside a <dd> are extracted before the
+    main text so their items aren't included twice (once as inline text via
+    get_text, once as explicit bullets).
+    """
+    terms = []
     soup = BeautifulSoup(content, "html.parser")
     content_div = soup.find("div", class_="mw-parser-output")
-    terms = []
-
     if not content_div:
-        # Dump a short snippet of the page to logs to help debugging
-        snippet = (content.decode('utf-8')[:1000] + "...") if content else ""
+        snippet = (content.decode('utf-8', errors='replace')[:1000] + "...") if content else ""
         logger.error("Couldn't find Wikipedia content container. Page snippet:\n%s", snippet)
         return terms
 
-    tags = list(content_div.find_all(["h2", "dt", "dd", "ul", "ol"]))
     current_term = None
     current_definition_parts = []
 
@@ -360,39 +409,63 @@ async def parse_brevity_terms():
         nonlocal current_term, current_definition_parts
         if current_term and current_definition_parts:
             definition = "\n".join(current_definition_parts).strip()
-            cleaned_term = clean_term(current_term)  # Use the updated clean_term function
-            terms.append({
-                "term": cleaned_term,
-                "definition": definition
-            })
+            cleaned_term = clean_term(current_term)
+            terms.append({"term": cleaned_term, "definition": definition})
         current_term = None
         current_definition_parts = []
 
-    for tag in tags:
+    # Identify top-level <dl>s (those not nested inside another <dl>) so a
+    # nested <dl> inside a <dd> can't show up as separate top-level terms.
+    top_level_dl_ids = {id(dl) for dl in content_div.find_all("dl") if not dl.find_parent("dl")}
+
+    for tag in content_div.find_all(["h2", "dl"]):
         if tag.name == "h2":
             heading_text = tag.get_text(" ", strip=True).lower()
             if any(x in heading_text for x in ["see also", "references", "footnotes", "sources"]):
                 logger.debug("Stopping parse at section: %s", heading_text)
-                break
-        elif tag.name == "dt":
-            flush_term()
-            for sup in tag.find_all("sup"):  # Remove [citation needed], etc.
+                flush_term()
+                logger.info("Parsed %d brevity terms from HTML.", len(terms))
+                return terms
+            continue
+
+        if id(tag) not in top_level_dl_ids:
+            continue
+
+        # tag is a top-level <dl>: iterate its DIRECT <dt>/<dd> children only.
+        for child in tag.find_all(["dt", "dd"], recursive=False):
+            if child.name == "dt":
+                flush_term()
+                for sup in child.find_all("sup"):
+                    sup.decompose()
+                current_term = child.get_text(" ", strip=True)
+                continue
+
+            if not current_term:
+                continue
+
+            for sup in child.find_all("sup"):
                 sup.decompose()
-            current_term = tag.get_text(" ", strip=True)
-            current_definition_parts = []
-        elif tag.name == "dd" and current_term:
-            for sup in tag.find_all("sup"):
-                sup.decompose()
-            for span in tag.find_all("span"):
+            for span in child.find_all("span"):
                 span.decompose()
-            text = tag.get_text(" ", strip=True)
-            text = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", text)  # Clean [[wiki|link]]
-            current_definition_parts.append(text)
-        elif tag.name in ["ul", "ol"] and current_term:
-            bullets = [f"- {li.get_text(' ', strip=True)}" for li in tag.find_all("li")]
-            current_definition_parts.extend(bullets)
-        # Yield control periodically in long loops
-        await asyncio.sleep(0)
+
+            # Pull nested ul/ol/dl out of the <dd> before extracting text, so
+            # bullet items / inner term content aren't included as inline text.
+            nested_blocks = child.find_all(["ul", "ol", "dl"], recursive=True)
+            for blk in nested_blocks:
+                blk.extract()
+
+            text = child.get_text(" ", strip=True)
+            text = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", text)
+            if text:
+                current_definition_parts.append(text)
+
+            for blk in nested_blocks:
+                if blk.name in ("ul", "ol"):
+                    bullets = [f"- {li.get_text(' ', strip=True)}" for li in blk.find_all("li", recursive=False)]
+                    current_definition_parts.extend(bullets)
+                # Nested <dl>s inside a <dd> are dropped — they're rare on the
+                # brevity-codes page and treating them as sub-definitions would
+                # be ambiguous.
 
     flush_term()
     logger.info("Parsed %d brevity terms from HTML.", len(terms))
@@ -422,13 +495,16 @@ async def update_brevity_terms():
     updated_terms = [term for term in new_terms if term['term'] in existing_terms_dict and term != existing_terms_dict[term['term']]]
     unchanged_terms = [term for term in new_terms if term['term'] in existing_terms_dict and term == existing_terms_dict[term['term']]]
 
-    # Backup current terms
+    # Atomically backup-then-replace so a crash mid-write can't leave us with
+    # the new TERMS_KEY but a stale (or missing) backup.
+    new_serialized = json.dumps(new_terms)
+    async with r.pipeline(transaction=True) as pipe:
+        if existing_raw:
+            pipe.set(f"{TERMS_KEY}_backup", existing_raw)
+        pipe.set(TERMS_KEY, new_serialized)
+        await pipe.execute()
     if existing_raw:
-        await r.set(f"{TERMS_KEY}_backup", existing_raw)
         logger.info("Backed up existing terms to TERMS_KEY_backup.")
-
-    # Update Redis with new terms
-    await r.set(TERMS_KEY, json.dumps(new_terms))
 
     logger.info(
         "Successfully loaded %d brevity terms. Added: %d, Updated: %d, Unchanged: %d.",
@@ -449,6 +525,25 @@ async def get_all_terms():
         return []
 
 
+def _truncate_code_block(text: str, limit: int) -> str:
+    """Truncate a ``` -fenced string to fit within `limit` chars while keeping
+    the closing fence intact, so Discord still renders it as a code block.
+
+    Returns the input unchanged if it already fits.
+    """
+    if len(text) <= limit:
+        return text
+    OPEN, CLOSE, MARKER = "```\n", "\n```", "..."
+    if not (text.startswith(OPEN) and text.endswith(CLOSE)):
+        # Not a fenced block we recognize — fall back to plain truncation.
+        return text[: limit - len(MARKER)] + MARKER
+    inner = text[len(OPEN): -len(CLOSE)]
+    max_inner = limit - len(OPEN) - len(CLOSE) - len(MARKER)
+    if max_inner < 0:
+        return text[:limit]
+    return OPEN + inner[:max_inner] + MARKER + CLOSE
+
+
 async def build_greenie_board_text(guild, user_greenies, name_col: int = 14, as_field: bool = False):
     """Return the Greenie Board text.
     If `as_field` is False (default) returns a decorated message with header + code block suitable
@@ -458,25 +553,25 @@ async def build_greenie_board_text(guild, user_greenies, name_col: int = 14, as_
     """
     lines = []
     
-    # Parallelize member fetching for all users
+    # Parallelize member fetching for all users.
+    # Strategy: cache hits first (guild.get_member, then client.get_user); only
+    # fall back to client.fetch_user as a last resort. Avoids guild.fetch_member
+    # entirely, which is an API call per uncached user and would rate-limit
+    # quickly with 10 users in a busy multi-guild bot.
     async def fetch_member_name(uid):
-        name = None
-        member = None
         try:
-            if guild:
-                member = guild.get_member(int(uid))
-                if not member:
-                    try:
-                        member = await guild.fetch_member(int(uid))
-                    except Exception:
-                        member = None
+            uid_int = int(uid)
+        except (TypeError, ValueError):
+            return str(uid)
+        if guild:
+            member = guild.get_member(uid_int)
             if member:
                 return member.display_name
-        except Exception:
-            pass
-
+        cached_user = client.get_user(uid_int)
+        if cached_user:
+            return cached_user.name
         try:
-            user_obj = await client.fetch_user(int(uid))
+            user_obj = await client.fetch_user(uid_int)
             return getattr(user_obj, 'name', str(uid))
         except Exception:
             return str(uid)
@@ -533,18 +628,26 @@ async def get_next_brevity_term(guild_id):
         logger.warning("No brevity terms available.")
         return None
 
-    used_terms = await load_used_terms(guild_id)
-    unused_terms = [t for t in all_terms if t["term"] not in used_terms]
+    # Retry loop guards against the read-pick-write race when /nextterm and the
+    # scheduled post run concurrently (or in a multi-instance deploy). SADD's
+    # return value is 1 when we won the race, 0 when another caller claimed it
+    # first; on a loss we re-read the used set and pick again.
+    max_attempts = 5
+    chosen = None
+    for _ in range(max_attempts):
+        used_terms = await load_used_terms(guild_id)
+        unused_terms = [t for t in all_terms if t["term"] not in used_terms]
+        if not unused_terms:
+            logger.info("All terms used for guild %s, resetting used terms.", guild_id)
+            await r.delete(f"used_terms:{guild_id}")
+            unused_terms = all_terms
 
-    if not unused_terms:
-        # All terms have been used — reset
-        logger.info("All terms used for guild %s, resetting used terms.", guild_id)
-        await r.delete(f"used_terms:{guild_id}")
-        used_terms = []
-        unused_terms = all_terms  # now full list again
+        chosen = random.choice(unused_terms)
+        if await save_used_term(guild_id, chosen["term"]):
+            return chosen
+        logger.debug("Lost race claiming term '%s' for guild %s; retrying.", chosen["term"], guild_id)
 
-    chosen = random.choice(unused_terms)
-    await save_used_term(guild_id, chosen["term"])
+    logger.warning("Exhausted race retries for guild %s; returning last picked term anyway.", guild_id)
     return chosen
 
 
@@ -560,14 +663,19 @@ async def get_brevity_term_by_name(name):
 # SLASH COMMANDS
 # -------------------------------
 @tree.command(name="setup", description="Set the current channel for daily brevity posts.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
 async def setup(interaction: discord.Interaction):
     await save_config(interaction.guild.id, interaction.channel.id)
     await enable_posting(interaction.guild.id)
-    # Initialize last_posted so first post happens after the configured interval
+    # /setup explicitly resets the schedule so the first post is one full
+    # interval from now, even on re-setup of an already-configured guild
+    # (where enable_posting would have left last_posted untouched).
     await set_last_posted(interaction.guild.id, time.time())
     await interaction.response.send_message(f"Setup complete for <#{interaction.channel.id}>.", ephemeral=True)
 
 @tree.command(name="nextterm", description="Send a new brevity term immediately.")
+@app_commands.guild_only()
 async def nextterm(interaction: discord.Interaction):
     try:
         await interaction.response.defer(thinking=True)  # <-- always defer immediately
@@ -577,13 +685,16 @@ async def nextterm(interaction: discord.Interaction):
 
     term = await get_next_brevity_term(interaction.guild.id)
     if not term:
-        await interaction.followup.send("No terms available.", ephemeral=True)
+        # The defer above was public (thinking=True); a followup with
+        # ephemeral=True would create a separate message and leave the
+        # public "Thinking..." placeholder hanging. Reply publicly instead.
+        await interaction.followup.send("No terms available.")
         return
     embed = discord.Embed(
         title=term['term'],
         description=term['definition'],
         color=discord.Color.blue(),
-        url=f"https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code#{term['term'][0]}"
+        url=WIKIPEDIA_URL,
     )
     image_url = await get_random_flickr_jet(FLICKR_API_KEY)
     if image_url:
@@ -592,6 +703,8 @@ async def nextterm(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 @tree.command(name="reloadterms", description="Manually refresh brevity terms from Wikipedia.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
 async def reloadterms(interaction: discord.Interaction):
     try:
         await interaction.response.defer(ephemeral=True)  # <-- defer immediately
@@ -632,12 +745,14 @@ async def define(interaction: discord.Interaction, term: str):
         title=entry['term'],
         description=entry['definition'],
         color=discord.Color.green(),
-        url=f"https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code#{entry['term'][0]}"
+        url=WIKIPEDIA_URL,
     )
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="setfrequency", description="Set the post frequency in hours for this server.")
 @app_commands.describe(hours="Number of hours between posts")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
 async def setfrequency(interaction: discord.Interaction, hours: int):
     if hours <= 0:
         await interaction.response.send_message("Frequency must be a positive integer.", ephemeral=True)
@@ -646,29 +761,40 @@ async def setfrequency(interaction: discord.Interaction, hours: int):
     await interaction.response.send_message(f"Frequency set to {hours} hour(s).", ephemeral=True)
 
 @tree.command(name="disableposting", description="Stop scheduled brevity term posts in this server.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
 async def disableposting(interaction: discord.Interaction):
     await disable_posting(interaction.guild.id)
     await interaction.response.send_message("Scheduled posting disabled.", ephemeral=True)
 
 @tree.command(name="enableposting", description="Resume scheduled brevity term posts in this server.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
 async def enableposting(interaction: discord.Interaction):
     await enable_posting(interaction.guild.id)
     await interaction.response.send_message("Scheduled posting enabled.", ephemeral=True)
 
 class PublicQuizView(discord.ui.View):
-    def __init__(self, question_idx, correct_idx, quiz_id, redis_conn, timeout=None):
+    def __init__(self, question_idx, correct_idx, quiz_id, redis_conn, ttl_seconds, timeout=None):
         super().__init__(timeout=timeout)
         self.question_idx = question_idx
         self.correct_idx = correct_idx
         self.quiz_id = quiz_id
         self.redis_conn = redis_conn
+        # TTL on the answer hash so a bot crash mid-quiz doesn't leak the key forever.
+        self.ttl_seconds = ttl_seconds
         self.answered_users = set()
 
     async def handle_vote(self, interaction, answer_idx):
         user_id = str(interaction.user.id)
         # Allow users to change their vote: always write the latest selection to Redis.
+        # Pipeline hset + expire so orphaned answer keys eventually expire.
         try:
-            await self.redis_conn.hset(f"quiz:{self.quiz_id}:answers:{self.question_idx}", user_id, answer_idx)
+            key = f"quiz:{self.quiz_id}:answers:{self.question_idx}"
+            async with self.redis_conn.pipeline(transaction=False) as pipe:
+                pipe.hset(key, user_id, answer_idx)
+                pipe.expire(key, self.ttl_seconds)
+                await pipe.execute()
         except Exception:
             # Best-effort: ignore storage errors so we don't block the interaction
             logger.exception("Failed to record vote for quiz %s q=%s user=%s", self.quiz_id, self.question_idx, user_id)
@@ -701,6 +827,7 @@ class PublicQuizView(discord.ui.View):
 
 @tree.command(name="quiz", description="Start a multiple-choice quiz on brevity terms")
 @app_commands.describe(questions="Number of questions to answer", mode="Quiz mode: public (poll in channel) or private (ephemeral message)", duration="Total quiz duration in minutes (public mode only)")
+@app_commands.guild_only()
 async def quiz(
     interaction: discord.Interaction,
     questions: int = 1,
@@ -708,33 +835,36 @@ async def quiz(
     duration: int = 2
 ):
     logger.info(f"/quiz invoked by user={interaction.user.id} guild={interaction.guild_id} questions={questions} mode={mode} duration={duration}")
+
+    # Defer immediately so we never miss Discord's 3-second response deadline.
+    # Private mode replies ephemerally; public mode replies in-channel.
+    is_private = mode != "public"
+    try:
+        await interaction.response.defer(ephemeral=is_private, thinking=True)
+    except discord.NotFound:
+        logger.warning("Interaction expired before defer could happen.")
+        return
+
     all_terms = await get_all_terms()
     max_questions = len(all_terms)
     if max_questions < 4:
-        await interaction.response.send_message("Not enough terms to generate a quiz.", ephemeral=True)
+        await interaction.followup.send("Not enough terms to generate a quiz.", ephemeral=True)
         return
     if questions < 1 or questions > max_questions:
-        await interaction.response.send_message(f"Number of questions must be between 1 and {max_questions}.", ephemeral=True)
+        await interaction.followup.send(f"Number of questions must be between 1 and {max_questions}.", ephemeral=True)
         return
 
     quiz_terms = random.sample(all_terms, questions)
     score = {"correct": 0, "total": questions}
 
     if mode == "private":
-        async def ask_question(q_idx):
+        async def ask_question(q_idx, parent_interaction=None):
+            # parent_interaction carries forward each button-click's interaction so
+            # subsequent questions use a fresh 15-minute token instead of the
+            # original slash-command interaction (which would expire on long quizzes).
+            parent = parent_interaction or interaction
             current = quiz_terms[q_idx]
             correct_term = current["term"]
-            def pick_single_definition(defn):
-                defn = defn.strip()
-                if re.match(r"^1\\. ", defn):
-                    parts = re.split(r"\\d+\\. ", defn)
-                    for part in parts:
-                        if part.strip():
-                            return part.strip()
-                for line in defn.split("\n"):
-                    if line.strip():
-                        return line.strip()
-                return defn
             correct_def = pick_single_definition(current["definition"])
             
             # Randomly choose question type: "term_to_definition" or "definition_to_term" 
@@ -800,7 +930,7 @@ async def quiz(
             
             class QuizView(discord.ui.View):
                 def __init__(self, options):
-                    super().__init__(timeout=60)
+                    super().__init__(timeout=300)
                     self.options = options
                 @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
                 async def optionA(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
@@ -833,14 +963,13 @@ async def quiz(
                     await interaction_btn.response.send_message(msg, ephemeral=True)
                     self.stop()
                     if q_idx + 1 < questions:
-                        await ask_question(q_idx + 1)
+                        # Pass the button's interaction forward so the next question
+                        # is sent through a fresh 15-minute token.
+                        await ask_question(q_idx + 1, parent_interaction=interaction_btn)
                     else:
-                        await interaction.followup.send(f"Quiz complete! You got {score['correct']} out of {score['total']} correct.", ephemeral=True)
-            
-            if q_idx == 0:
-                await interaction.response.send_message(embed=embed, view=QuizView(options), ephemeral=True)
-            else:
-                await interaction.followup.send(embed=embed, view=QuizView(options), ephemeral=True)
+                        await interaction_btn.followup.send(f"Quiz complete! You got {score['correct']} out of {score['total']} correct.", ephemeral=True)
+
+            await parent.followup.send(embed=embed, view=QuizView(options), ephemeral=True)
         await ask_question(0)
         return
 
@@ -856,39 +985,6 @@ async def quiz(
     option_labels = ["A", "B", "C", "D"]
     for q_idx, current in enumerate(quiz_terms):
         correct_term = current["term"]
-        def pick_single_definition(defn):
-            """Return a single definition string.
-            If the definition contains numbered variants (e.g. "1. ... 2. ..."),
-            split them and return a randomly chosen variant. Otherwise fall back
-            to choosing a non-empty line or the whole definition.
-            """
-            defn = defn.strip()
-            # Split numbered variants like '1. ... 2. ...' or '1) ... 2) ...'
-            parts = re.split(r"\d+\.\s*|\d+\)\s*", defn)
-            parts = [p.strip() for p in parts if p.strip()]
-            # Clean and keep only parts that contain letters (avoid numeric-only fragments)
-            good_parts = []
-            for p in parts:
-                # remove stray leading bullets or remaining digits, but KEEP leading '[' characters
-                # (some definitions are bracketed like '[state system] ...' and the '[' is meaningful)
-                cleaned = re.sub(r"^[\s\-\(\)\.]*\d*[\)\.\-]*\s*", "", p).strip()
-                if re.search(r"[A-Za-z]", cleaned) and len(cleaned) >= 5:
-                    good_parts.append(cleaned)
-            if len(good_parts) > 1:
-                chosen = random.choice(good_parts)
-                logger.info(f"Picked numbered variant: {chosen[:80]}")
-                return chosen
-            # If we found exactly one reasonable part, use it
-            if len(good_parts) == 1:
-                return good_parts[0]
-            # Fallback: split by non-empty lines and pick one that contains letters
-            lines = [l.strip() for l in defn.splitlines() if l.strip()]
-            good_lines = [l for l in lines if re.search(r"[A-Za-z]", l) and len(l) >= 5]
-            if len(good_lines) >= 1:
-                chosen = random.choice(good_lines)
-                logger.info(f"Picked line-variant: {chosen[:80]}")
-                return chosen
-            return defn
         correct_def = pick_single_definition(current["definition"])
         
         # Randomly choose question type: "term_to_definition" or "definition_to_term" 
@@ -952,7 +1048,9 @@ async def quiz(
                 opt["display"] = term
                 embed.add_field(name="", value=f"**`{label}`** {term}", inline=False)
         embed.set_footer(text=f"Question {q_idx+1} of {questions} • Quiz initiated by {interaction.user.display_name}")
-        view = PublicQuizView(q_idx, correct_idx, quiz_id, r, timeout=duration*60)
+        # ttl outlives the quiz duration by 1h so a slightly delayed summary still
+        # finds the keys; close_and_summarize will delete them on success anyway.
+        view = PublicQuizView(q_idx, correct_idx, quiz_id, r, ttl_seconds=duration*60 + 3600, timeout=duration*60)
         embeds.append(embed)
         views.append(view)
         used_options.append(options)
@@ -963,12 +1061,9 @@ async def quiz(
     # Defensive checks before sending to capture permission issues early
     if channel is None:
         logger.error("interaction.channel is None for guild=%s user=%s", interaction.guild_id, interaction.user.id)
-        await interaction.response.send_message("Couldn't determine the channel to post the quiz in. Please run this command in a server text channel.", ephemeral=True)
+        await interaction.followup.send("Couldn't determine the channel to post the quiz in. Please run this command in a server text channel.", ephemeral=True)
         return
 
-    # We'll attempt to announce and post followups; rely on try/except to surface permission errors
-
-    # Announce the quiz first via the interaction response (so followups are allowed)
     minute_label = "minute" if duration == 1 else "minutes"
     question_label = "question" if questions == 1 else "questions"
     start_embed = discord.Embed(
@@ -978,18 +1073,16 @@ async def quiz(
     )
     start_embed.set_footer(text=f"Quiz initiated by {interaction.user.display_name}")
 
-    # Send the start embed as the interaction response so we can post followups
+    # Response slot was consumed by the defer at the top, so always use followup.
     try:
-        await interaction.response.send_message(embed=start_embed, ephemeral=False)
+        await interaction.followup.send(embed=start_embed, ephemeral=False)
     except Exception as e:
-        logger.error("Failed to send start embed response: %s", e)
-        # Fall back to attempting to send as a followup (if response used elsewhere)
+        logger.error("Failed to send start embed: %s", e)
         try:
-            await interaction.followup.send(embed=start_embed, ephemeral=False)
-        except Exception as e2:
-            logger.error("Also failed to send start embed as followup: %s", e2)
-            await interaction.response.send_message("Couldn't announce the quiz; check my permissions.", ephemeral=True)
-            return
+            await interaction.followup.send("Couldn't announce the quiz; check my permissions.", ephemeral=True)
+        except Exception:
+            logger.error("Also failed to send fallback ephemeral about start embed failure.")
+        return
 
     for idx, (embed, view) in enumerate(zip(embeds, views)):
         # Add a small delay between messages to avoid webhook rate limits (except for first message)
@@ -1034,12 +1127,9 @@ async def quiz(
                     "Check my role and channel permissions, and see the bot logs for details."
                 )
 
-            # Try to inform the user via the interaction response or followup
+            # Response was already deferred at the top, so always use followup.
             try:
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(user_msg, ephemeral=True)
-                else:
-                    await interaction.followup.send(user_msg, ephemeral=True)
+                await interaction.followup.send(user_msg, ephemeral=True)
             except Exception:
                 logger.error("Also failed to send ephemeral response to the user about missing access.")
             return
@@ -1097,8 +1187,12 @@ async def quiz(
             correct = user_correct.get(uid, 0)
             entry = json.dumps({"correct": correct, "total": total, "ts": int(time.time())})
             key = f"greenie:{interaction.guild_id}:{uid}"
-            await r.lpush(key, entry)
-            await r.ltrim(key, 0, 9)  # Keep only last 10
+            # Pipeline so a concurrent reader can't observe an 11-entry list
+            # between LPUSH and LTRIM.
+            async with r.pipeline(transaction=True) as pipe:
+                pipe.lpush(key, entry)
+                pipe.ltrim(key, 0, 9)
+                await pipe.execute()
             logger.info(f"Saved greenie entry for guild={interaction.guild_id} user={uid} -> {correct}/{total}")
             await asyncio.sleep(0)
 
@@ -1117,7 +1211,8 @@ async def quiz(
             results_embed.add_field(name="Quiz Leaderboard", value="No correct answers this round.", inline=False)
 
         # Greenie Board (last 10 quizzes, 10 most recent users) -> add as an embed field
-        greenie_keys = await r.keys(f"greenie:{interaction.guild_id}:*")
+        # SCAN instead of KEYS so we don't block Redis on large keyspaces.
+        greenie_keys = [k async for k in r.scan_iter(match=f"greenie:{interaction.guild_id}:*", count=100)]
         user_greenies = []
         for key in greenie_keys:
             uid = key.split(":")[-1]
@@ -1131,9 +1226,10 @@ async def quiz(
         # Insert the board INTO the results embed as a code-block field.
         try:
             board_field = await build_greenie_board_text(interaction.guild, user_greenies, as_field=True)
-            # Embed fields must be <= 1024 characters
-            if len(board_field) > 1024:
-                board_field = board_field[:1021] + "..."
+            # Embed fields must be <= 1024 characters. Truncate the inner
+            # content (between the code fences) so the closing ``` is preserved
+            # and Discord doesn't render the rest of the embed as a code block.
+            board_field = _truncate_code_block(board_field, 1024)
             # add a blank field to visually separate leaderboard from greenie board
             results_embed.add_field(name="\u200b", value="\u200b", inline=False)
             results_embed.add_field(name="Greenie Board (Last 10 quizzes)", value=board_field, inline=False)
@@ -1163,13 +1259,26 @@ async def quiz(
                 logger.error("Bot lacks permissions to post quiz results. Required permissions: View Channels, Send Messages, Embed Links")
             else:
                 logger.exception("Unexpected error posting quiz results")
+
+        # Best-effort cleanup of per-question answer hashes. The TTL set by
+        # PublicQuizView is the safety net if this code never runs.
+        try:
+            answer_keys = [f"quiz:{quiz_id}:answers:{i}" for i in range(len(views))]
+            if answer_keys:
+                await r.delete(*answer_keys)
+                logger.info("Cleaned up %d answer keys for quiz_id=%s", len(answer_keys), quiz_id)
+        except Exception:
+            logger.exception("Failed to clean up answer keys for quiz_id=%s", quiz_id)
+
     # Schedule the summary task
     asyncio.create_task(close_and_summarize())
 # Greenie Board command
 @tree.command(name="greenieboard", description="Show the Greenie Board for this server (last 10 quizzes per user)")
+@app_commands.guild_only()
 async def greenieboard(interaction: discord.Interaction):
     guild_id = interaction.guild_id
-    greenie_keys = await r.keys(f"greenie:{guild_id}:*")
+    # SCAN instead of KEYS so we don't block Redis on large keyspaces.
+    greenie_keys = [k async for k in r.scan_iter(match=f"greenie:{guild_id}:*", count=100)]
     user_greenies = []
     for key in greenie_keys:
         uid = key.split(":")[-1]
@@ -1188,6 +1297,7 @@ async def greenieboard(interaction: discord.Interaction):
 
 
 @tree.command(name="checkperms", description="Show the bot's effective permissions in this channel")
+@app_commands.guild_only()
 async def checkperms(interaction: discord.Interaction):
     channel = interaction.channel
     if not channel:
@@ -1363,7 +1473,7 @@ async def post_brevity_term():
                 title=term['term'],
                 description=term['definition'],
                 color=discord.Color.blue(),
-                url=f"https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code#{term['term'][0]}"
+                url=WIKIPEDIA_URL,
             )
             image_url = await get_random_flickr_jet(FLICKR_API_KEY)
             if image_url:
@@ -1386,18 +1496,7 @@ async def refresh_terms_daily():
 
 @tasks.loop(hours=1)
 async def log_bot_stats():
-    num_servers = len(client.guilds)
-    total_words = int(await r.get("total_words") or 0)
-    command_usage = json.loads(await r.get("command_usage") or "{}")
-
-    # Format command usage stats
-    command_usage_stats = ", ".join([f"{cmd}: {count}" for cmd, count in command_usage.items()])
-
-    # Log the stats to the console
-    logger.info(
-        "BrevityBot Statistics: Servers: %d, Words sent per day: %d, Slash command usage: %s",
-        num_servers, total_words, command_usage_stats
-    )
+    logger.info("BrevityBot Statistics: Servers: %d", len(client.guilds))
 
 # -------------------------------
 # BOT READY EVENT
@@ -1437,8 +1536,11 @@ async def on_ready():
             logger.info("Slash commands synced successfully")
         except discord.HTTPException as e:
             if e.status == 429:  # Rate limited
-                logger.warning("Command sync rate limited. Will retry on next restart (after cooldown).")
+                logger.warning("Command sync rate limited. Cooling down for an hour across restarts.")
                 _commands_synced = True  # Don't retry this session
+                # Persist the timestamp so a fast crash-loop restart doesn't keep
+                # hammering the rate limit before the cooldown expires.
+                await r.set("last_command_sync", str(current_time))
             else:
                 logger.error("Failed to sync commands: %s", e)
                 _commands_synced = True  # Don't retry this session to avoid repeated errors
@@ -1463,19 +1565,6 @@ async def on_ready():
     await start_health_check_server()
 
 
-if __name__ == "__main__":
-    logger.info("Starting BrevityBot...")
-    
-    # Add a small startup delay to prevent rapid restart loops from triggering rate limits
-    # This gives Railway/hosting platform time to stabilize before attempting Discord connection
-    startup_delay = int(os.getenv("STARTUP_DELAY", "0"))
-    if startup_delay > 0:
-        logger.info("Waiting %d seconds before connecting (STARTUP_DELAY)...", startup_delay)
-        time.sleep(startup_delay)
-    
-    client.run(DISCORD_BOT_TOKEN)
-
-
 @client.event
 async def on_guild_remove(guild):
     guild_id = guild.id
@@ -1487,55 +1576,14 @@ async def on_guild_remove(guild):
     await r.srem(DISABLED_GUILDS_KEY, str(guild_id))
 
 
-class PublicQuizView(discord.ui.View):
-    def __init__(self, message_id, options, correct_idx, timeout=60):
-        super().__init__(timeout=timeout)
-        self.message_id = message_id
-        self.options = options
-        self.correct_idx = correct_idx
-        self.votes = {}  # user_id -> selected_index
-        self.message = None
+if __name__ == "__main__":
+    logger.info("Starting BrevityBot...")
 
-    async def on_timeout(self):
-        correct_users = [uid for uid, idx in self.votes.items() if idx == self.correct_idx]
-        key = f"quiz_results:{self.message_id}"
-        await r.set(key, json.dumps({
-            "correct_idx": self.correct_idx,
-            "votes": self.votes
-        }))
-        await r.expire(key, 6 * 3600)
+    # Add a small startup delay to prevent rapid restart loops from triggering rate limits
+    # This gives Railway/hosting platform time to stabilize before attempting Discord connection
+    startup_delay = int(os.getenv("STARTUP_DELAY", "0"))
+    if startup_delay > 0:
+        logger.info("Waiting %d seconds before connecting (STARTUP_DELAY)...", startup_delay)
+        time.sleep(startup_delay)
 
-        for uid, idx in self.votes.items():
-            score_key = f"user_score:{uid}"
-            prev_json = await r.get(score_key)
-            prev = json.loads(prev_json or '{"correct": 0, "total": 0}')
-            prev["correct"] += int(idx == self.correct_idx)
-            prev["total"] += 1
-            await r.set(score_key, json.dumps(prev))
-
-        correct_mentions = ", ".join(f"<@{uid}>" for uid in correct_users) or "None"
-        answer_text = (
-            f"The correct answer was **{['A', 'B', 'C', 'D'][self.correct_idx]}**: {self.options[self.correct_idx]['definition']}\n"
-            f"✅ Correct users: {correct_mentions}"
-        )
-
-        await self.message.channel.send(answer_text)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id not in self.votes
-
-    async def handle_vote(self, interaction, idx):
-        self.votes[interaction.user.id] = idx
-        await interaction.response.send_message(f"Vote recorded: {['A', 'B', 'C', 'D'][idx]}", ephemeral=True)
-
-    @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
-    async def button_a(self, interaction, button): await self.handle_vote(interaction, 0)
-
-    @discord.ui.button(label="B", style=discord.ButtonStyle.primary)
-    async def button_b(self, interaction, button): await self.handle_vote(interaction, 1)
-
-    @discord.ui.button(label="C", style=discord.ButtonStyle.primary)
-    async def button_c(self, interaction, button): await self.handle_vote(interaction, 2)
-
-    @discord.ui.button(label="D", style=discord.ButtonStyle.primary)
-    async def button_d(self, interaction, button): await self.handle_vote(interaction, 3)
+    client.run(DISCORD_BOT_TOKEN)
