@@ -149,6 +149,7 @@ CHANNEL_MAP_KEY = "post_channels"
 FREQ_KEY_PREFIX = "post_freq:"
 LAST_POSTED_KEY_PREFIX = "last_posted:"
 DISABLED_GUILDS_KEY = "disabled_posting"
+WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code"
 
 # -------------------------------
 # DISCORD CLIENT
@@ -343,7 +344,7 @@ def pick_single_definition(defn: str) -> str:
 
 async def parse_brevity_terms():
 
-    url = "https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code"
+    url = WIKIPEDIA_URL
     # Use a polite, identifiable User-Agent. Allow override via USER_AGENT env var.
     user_agent = os.getenv("USER_AGENT") or "BrevityBot/1.0 (+https://github.com/joemurrell/brevitybot)"
     headers = {"User-Agent": user_agent}
@@ -524,6 +525,25 @@ async def get_all_terms():
         return []
 
 
+def _truncate_code_block(text: str, limit: int) -> str:
+    """Truncate a ``` -fenced string to fit within `limit` chars while keeping
+    the closing fence intact, so Discord still renders it as a code block.
+
+    Returns the input unchanged if it already fits.
+    """
+    if len(text) <= limit:
+        return text
+    OPEN, CLOSE, MARKER = "```\n", "\n```", "..."
+    if not (text.startswith(OPEN) and text.endswith(CLOSE)):
+        # Not a fenced block we recognize — fall back to plain truncation.
+        return text[: limit - len(MARKER)] + MARKER
+    inner = text[len(OPEN): -len(CLOSE)]
+    max_inner = limit - len(OPEN) - len(CLOSE) - len(MARKER)
+    if max_inner < 0:
+        return text[:limit]
+    return OPEN + inner[:max_inner] + MARKER + CLOSE
+
+
 async def build_greenie_board_text(guild, user_greenies, name_col: int = 14, as_field: bool = False):
     """Return the Greenie Board text.
     If `as_field` is False (default) returns a decorated message with header + code block suitable
@@ -533,25 +553,25 @@ async def build_greenie_board_text(guild, user_greenies, name_col: int = 14, as_
     """
     lines = []
     
-    # Parallelize member fetching for all users
+    # Parallelize member fetching for all users.
+    # Strategy: cache hits first (guild.get_member, then client.get_user); only
+    # fall back to client.fetch_user as a last resort. Avoids guild.fetch_member
+    # entirely, which is an API call per uncached user and would rate-limit
+    # quickly with 10 users in a busy multi-guild bot.
     async def fetch_member_name(uid):
-        name = None
-        member = None
         try:
-            if guild:
-                member = guild.get_member(int(uid))
-                if not member:
-                    try:
-                        member = await guild.fetch_member(int(uid))
-                    except Exception:
-                        member = None
+            uid_int = int(uid)
+        except (TypeError, ValueError):
+            return str(uid)
+        if guild:
+            member = guild.get_member(uid_int)
             if member:
                 return member.display_name
-        except Exception:
-            pass
-
+        cached_user = client.get_user(uid_int)
+        if cached_user:
+            return cached_user.name
         try:
-            user_obj = await client.fetch_user(int(uid))
+            user_obj = await client.fetch_user(uid_int)
             return getattr(user_obj, 'name', str(uid))
         except Exception:
             return str(uid)
@@ -648,7 +668,9 @@ async def get_brevity_term_by_name(name):
 async def setup(interaction: discord.Interaction):
     await save_config(interaction.guild.id, interaction.channel.id)
     await enable_posting(interaction.guild.id)
-    # Initialize last_posted so first post happens after the configured interval
+    # /setup explicitly resets the schedule so the first post is one full
+    # interval from now, even on re-setup of an already-configured guild
+    # (where enable_posting would have left last_posted untouched).
     await set_last_posted(interaction.guild.id, time.time())
     await interaction.response.send_message(f"Setup complete for <#{interaction.channel.id}>.", ephemeral=True)
 
@@ -663,13 +685,16 @@ async def nextterm(interaction: discord.Interaction):
 
     term = await get_next_brevity_term(interaction.guild.id)
     if not term:
-        await interaction.followup.send("No terms available.", ephemeral=True)
+        # The defer above was public (thinking=True); a followup with
+        # ephemeral=True would create a separate message and leave the
+        # public "Thinking..." placeholder hanging. Reply publicly instead.
+        await interaction.followup.send("No terms available.")
         return
     embed = discord.Embed(
         title=term['term'],
         description=term['definition'],
         color=discord.Color.blue(),
-        url=f"https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code#{term['term'][0]}"
+        url=WIKIPEDIA_URL,
     )
     image_url = await get_random_flickr_jet(FLICKR_API_KEY)
     if image_url:
@@ -720,7 +745,7 @@ async def define(interaction: discord.Interaction, term: str):
         title=entry['term'],
         description=entry['definition'],
         color=discord.Color.green(),
-        url=f"https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code#{entry['term'][0]}"
+        url=WIKIPEDIA_URL,
     )
     await interaction.response.send_message(embed=embed)
 
@@ -1201,9 +1226,10 @@ async def quiz(
         # Insert the board INTO the results embed as a code-block field.
         try:
             board_field = await build_greenie_board_text(interaction.guild, user_greenies, as_field=True)
-            # Embed fields must be <= 1024 characters
-            if len(board_field) > 1024:
-                board_field = board_field[:1021] + "..."
+            # Embed fields must be <= 1024 characters. Truncate the inner
+            # content (between the code fences) so the closing ``` is preserved
+            # and Discord doesn't render the rest of the embed as a code block.
+            board_field = _truncate_code_block(board_field, 1024)
             # add a blank field to visually separate leaderboard from greenie board
             results_embed.add_field(name="\u200b", value="\u200b", inline=False)
             results_embed.add_field(name="Greenie Board (Last 10 quizzes)", value=board_field, inline=False)
@@ -1447,7 +1473,7 @@ async def post_brevity_term():
                 title=term['term'],
                 description=term['definition'],
                 color=discord.Color.blue(),
-                url=f"https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code#{term['term'][0]}"
+                url=WIKIPEDIA_URL,
             )
             image_url = await get_random_flickr_jet(FLICKR_API_KEY)
             if image_url:
@@ -1470,18 +1496,7 @@ async def refresh_terms_daily():
 
 @tasks.loop(hours=1)
 async def log_bot_stats():
-    num_servers = len(client.guilds)
-    total_words = int(await r.get("total_words") or 0)
-    command_usage = json.loads(await r.get("command_usage") or "{}")
-
-    # Format command usage stats
-    command_usage_stats = ", ".join([f"{cmd}: {count}" for cmd, count in command_usage.items()])
-
-    # Log the stats to the console
-    logger.info(
-        "BrevityBot Statistics: Servers: %d, Words sent per day: %d, Slash command usage: %s",
-        num_servers, total_words, command_usage_stats
-    )
+    logger.info("BrevityBot Statistics: Servers: %d", len(client.guilds))
 
 # -------------------------------
 # BOT READY EVENT
@@ -1521,8 +1536,11 @@ async def on_ready():
             logger.info("Slash commands synced successfully")
         except discord.HTTPException as e:
             if e.status == 429:  # Rate limited
-                logger.warning("Command sync rate limited. Will retry on next restart (after cooldown).")
+                logger.warning("Command sync rate limited. Cooling down for an hour across restarts.")
                 _commands_synced = True  # Don't retry this session
+                # Persist the timestamp so a fast crash-loop restart doesn't keep
+                # hammering the rate limit before the cooldown expires.
+                await r.set("last_command_sync", str(current_time))
             else:
                 logger.error("Failed to sync commands: %s", e)
                 _commands_synced = True  # Don't retry this session to avoid repeated errors
