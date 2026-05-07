@@ -151,6 +151,13 @@ LAST_POSTED_KEY_PREFIX = "last_posted:"
 DISABLED_GUILDS_KEY = "disabled_posting"
 WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code"
 
+# In-memory term cache. Populated lazily by get_all_terms (and primed in
+# on_ready), invalidated by update_brevity_terms. The TTL is a multi-instance
+# backstop — terms change at most once a day, so 5 min of staleness is fine.
+_terms_cache = None
+_terms_cache_at = 0.0
+_TERMS_CACHE_TTL = 300
+
 # -------------------------------
 # DISCORD CLIENT
 # -------------------------------
@@ -505,6 +512,8 @@ async def update_brevity_terms():
         await pipe.execute()
     if existing_raw:
         logger.info("Backed up existing terms to TERMS_KEY_backup.")
+    # Drop the local cache so the next get_all_terms reflects the new write.
+    _invalidate_terms_cache()
 
     logger.info(
         "Successfully loaded %d brevity terms. Added: %d, Updated: %d, Unchanged: %d.",
@@ -514,15 +523,35 @@ async def update_brevity_terms():
     return len(new_terms), len(added_terms), len(updated_terms)
 
 async def get_all_terms():
+    """Return the cached brevity-terms list, fetching from Redis on miss.
+
+    The cache lives in this process and is invalidated locally when
+    update_brevity_terms succeeds. The TTL is a backstop for multi-instance
+    deploys where another replica may have refreshed Redis (terms change at
+    most once a day, so 5-minute staleness is fine).
+    """
+    global _terms_cache, _terms_cache_at
+    now = time.time()
+    if _terms_cache is not None and (now - _terms_cache_at) < _TERMS_CACHE_TTL:
+        return _terms_cache
+
     terms_data = await r.get(TERMS_KEY)
     if not terms_data:
         return []
-    
     try:
-        return json.loads(terms_data)
+        parsed = json.loads(terms_data)
     except json.JSONDecodeError as e:
         logger.error("Failed to decode terms data from Redis: %s", e)
         return []
+    _terms_cache = parsed
+    _terms_cache_at = now
+    return parsed
+
+
+def _invalidate_terms_cache():
+    global _terms_cache, _terms_cache_at
+    _terms_cache = None
+    _terms_cache_at = 0.0
 
 
 def _truncate_code_block(text: str, limit: int) -> str:
@@ -1513,7 +1542,12 @@ async def on_ready():
         decode_responses=True
     )
     logger.info("Connected to Redis at %s:%s", parsed_url.hostname, parsed_url.port)
-    
+
+    # Prime the terms cache so the first /define / autocomplete / quiz doesn't
+    # eat the cold-cache penalty (~500-term JSON parse).
+    primed = await get_all_terms()
+    logger.info("Primed term cache with %d terms", len(primed))
+
     logger.info("Logged in as %s (ID: %s)", client.user.name, client.user.id)
     
     # Only sync commands if needed, with rate limit protection
