@@ -1463,19 +1463,6 @@ async def on_ready():
     await start_health_check_server()
 
 
-if __name__ == "__main__":
-    logger.info("Starting BrevityBot...")
-    
-    # Add a small startup delay to prevent rapid restart loops from triggering rate limits
-    # This gives Railway/hosting platform time to stabilize before attempting Discord connection
-    startup_delay = int(os.getenv("STARTUP_DELAY", "0"))
-    if startup_delay > 0:
-        logger.info("Waiting %d seconds before connecting (STARTUP_DELAY)...", startup_delay)
-        time.sleep(startup_delay)
-    
-    client.run(DISCORD_BOT_TOKEN)
-
-
 @client.event
 async def on_guild_remove(guild):
     guild_id = guild.id
@@ -1487,55 +1474,14 @@ async def on_guild_remove(guild):
     await r.srem(DISABLED_GUILDS_KEY, str(guild_id))
 
 
-class PublicQuizView(discord.ui.View):
-    def __init__(self, message_id, options, correct_idx, timeout=60):
-        super().__init__(timeout=timeout)
-        self.message_id = message_id
-        self.options = options
-        self.correct_idx = correct_idx
-        self.votes = {}  # user_id -> selected_index
-        self.message = None
+if __name__ == "__main__":
+    logger.info("Starting BrevityBot...")
 
-    async def on_timeout(self):
-        correct_users = [uid for uid, idx in self.votes.items() if idx == self.correct_idx]
-        key = f"quiz_results:{self.message_id}"
-        await r.set(key, json.dumps({
-            "correct_idx": self.correct_idx,
-            "votes": self.votes
-        }))
-        await r.expire(key, 6 * 3600)
+    # Add a small startup delay to prevent rapid restart loops from triggering rate limits
+    # This gives Railway/hosting platform time to stabilize before attempting Discord connection
+    startup_delay = int(os.getenv("STARTUP_DELAY", "0"))
+    if startup_delay > 0:
+        logger.info("Waiting %d seconds before connecting (STARTUP_DELAY)...", startup_delay)
+        time.sleep(startup_delay)
 
-        for uid, idx in self.votes.items():
-            score_key = f"user_score:{uid}"
-            prev_json = await r.get(score_key)
-            prev = json.loads(prev_json or '{"correct": 0, "total": 0}')
-            prev["correct"] += int(idx == self.correct_idx)
-            prev["total"] += 1
-            await r.set(score_key, json.dumps(prev))
-
-        correct_mentions = ", ".join(f"<@{uid}>" for uid in correct_users) or "None"
-        answer_text = (
-            f"The correct answer was **{['A', 'B', 'C', 'D'][self.correct_idx]}**: {self.options[self.correct_idx]['definition']}\n"
-            f"✅ Correct users: {correct_mentions}"
-        )
-
-        await self.message.channel.send(answer_text)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id not in self.votes
-
-    async def handle_vote(self, interaction, idx):
-        self.votes[interaction.user.id] = idx
-        await interaction.response.send_message(f"Vote recorded: {['A', 'B', 'C', 'D'][idx]}", ephemeral=True)
-
-    @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
-    async def button_a(self, interaction, button): await self.handle_vote(interaction, 0)
-
-    @discord.ui.button(label="B", style=discord.ButtonStyle.primary)
-    async def button_b(self, interaction, button): await self.handle_vote(interaction, 1)
-
-    @discord.ui.button(label="C", style=discord.ButtonStyle.primary)
-    async def button_c(self, interaction, button): await self.handle_vote(interaction, 2)
-
-    @discord.ui.button(label="D", style=discord.ButtonStyle.primary)
-    async def button_d(self, interaction, button): await self.handle_vote(interaction, 3)
+    client.run(DISCORD_BOT_TOKEN)
