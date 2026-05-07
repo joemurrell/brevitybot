@@ -379,17 +379,28 @@ async def parse_brevity_terms():
     if status != 200:
         logger.error("Non-200 response while fetching brevity terms: %s", status)
         # still attempt to parse body if present
+    return _parse_terms_from_content(content or b"")
+
+
+def _parse_terms_from_content(content):
+    """Extract `[{term, definition}]` from a Wikipedia HTML page body.
+
+    Walks only <dl> blocks (definition lists) and stops at h2 headers like
+    "See also" or "References". Within each <dl>, iterates the DIRECT
+    <dt>/<dd> children — so a nested <dl> never gets double-counted, and
+    a stray <ul>/<ol> outside any <dl> can never be glued onto the previous
+    term's definition. Lists nested inside a <dd> are extracted before the
+    main text so their items aren't included twice (once as inline text via
+    get_text, once as explicit bullets).
+    """
+    terms = []
     soup = BeautifulSoup(content, "html.parser")
     content_div = soup.find("div", class_="mw-parser-output")
-    terms = []
-
     if not content_div:
-        # Dump a short snippet of the page to logs to help debugging
-        snippet = (content.decode('utf-8')[:1000] + "...") if content else ""
+        snippet = (content.decode('utf-8', errors='replace')[:1000] + "...") if content else ""
         logger.error("Couldn't find Wikipedia content container. Page snippet:\n%s", snippet)
         return terms
 
-    tags = list(content_div.find_all(["h2", "dt", "dd", "ul", "ol"]))
     current_term = None
     current_definition_parts = []
 
@@ -397,39 +408,63 @@ async def parse_brevity_terms():
         nonlocal current_term, current_definition_parts
         if current_term and current_definition_parts:
             definition = "\n".join(current_definition_parts).strip()
-            cleaned_term = clean_term(current_term)  # Use the updated clean_term function
-            terms.append({
-                "term": cleaned_term,
-                "definition": definition
-            })
+            cleaned_term = clean_term(current_term)
+            terms.append({"term": cleaned_term, "definition": definition})
         current_term = None
         current_definition_parts = []
 
-    for tag in tags:
+    # Identify top-level <dl>s (those not nested inside another <dl>) so a
+    # nested <dl> inside a <dd> can't show up as separate top-level terms.
+    top_level_dl_ids = {id(dl) for dl in content_div.find_all("dl") if not dl.find_parent("dl")}
+
+    for tag in content_div.find_all(["h2", "dl"]):
         if tag.name == "h2":
             heading_text = tag.get_text(" ", strip=True).lower()
             if any(x in heading_text for x in ["see also", "references", "footnotes", "sources"]):
                 logger.debug("Stopping parse at section: %s", heading_text)
-                break
-        elif tag.name == "dt":
-            flush_term()
-            for sup in tag.find_all("sup"):  # Remove [citation needed], etc.
+                flush_term()
+                logger.info("Parsed %d brevity terms from HTML.", len(terms))
+                return terms
+            continue
+
+        if id(tag) not in top_level_dl_ids:
+            continue
+
+        # tag is a top-level <dl>: iterate its DIRECT <dt>/<dd> children only.
+        for child in tag.find_all(["dt", "dd"], recursive=False):
+            if child.name == "dt":
+                flush_term()
+                for sup in child.find_all("sup"):
+                    sup.decompose()
+                current_term = child.get_text(" ", strip=True)
+                continue
+
+            if not current_term:
+                continue
+
+            for sup in child.find_all("sup"):
                 sup.decompose()
-            current_term = tag.get_text(" ", strip=True)
-            current_definition_parts = []
-        elif tag.name == "dd" and current_term:
-            for sup in tag.find_all("sup"):
-                sup.decompose()
-            for span in tag.find_all("span"):
+            for span in child.find_all("span"):
                 span.decompose()
-            text = tag.get_text(" ", strip=True)
-            text = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", text)  # Clean [[wiki|link]]
-            current_definition_parts.append(text)
-        elif tag.name in ["ul", "ol"] and current_term:
-            bullets = [f"- {li.get_text(' ', strip=True)}" for li in tag.find_all("li")]
-            current_definition_parts.extend(bullets)
-        # Yield control periodically in long loops
-        await asyncio.sleep(0)
+
+            # Pull nested ul/ol/dl out of the <dd> before extracting text, so
+            # bullet items / inner term content aren't included as inline text.
+            nested_blocks = child.find_all(["ul", "ol", "dl"], recursive=True)
+            for blk in nested_blocks:
+                blk.extract()
+
+            text = child.get_text(" ", strip=True)
+            text = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", text)
+            if text:
+                current_definition_parts.append(text)
+
+            for blk in nested_blocks:
+                if blk.name in ("ul", "ol"):
+                    bullets = [f"- {li.get_text(' ', strip=True)}" for li in blk.find_all("li", recursive=False)]
+                    current_definition_parts.extend(bullets)
+                # Nested <dl>s inside a <dd> are dropped — they're rare on the
+                # brevity-codes page and treating them as sub-definitions would
+                # be ambiguous.
 
     flush_term()
     logger.info("Parsed %d brevity terms from HTML.", len(terms))
