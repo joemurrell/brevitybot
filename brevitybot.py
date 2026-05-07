@@ -590,6 +590,8 @@ async def get_brevity_term_by_name(name):
 # SLASH COMMANDS
 # -------------------------------
 @tree.command(name="setup", description="Set the current channel for daily brevity posts.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
 async def setup(interaction: discord.Interaction):
     await save_config(interaction.guild.id, interaction.channel.id)
     await enable_posting(interaction.guild.id)
@@ -598,6 +600,7 @@ async def setup(interaction: discord.Interaction):
     await interaction.response.send_message(f"Setup complete for <#{interaction.channel.id}>.", ephemeral=True)
 
 @tree.command(name="nextterm", description="Send a new brevity term immediately.")
+@app_commands.guild_only()
 async def nextterm(interaction: discord.Interaction):
     try:
         await interaction.response.defer(thinking=True)  # <-- always defer immediately
@@ -622,6 +625,8 @@ async def nextterm(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 @tree.command(name="reloadterms", description="Manually refresh brevity terms from Wikipedia.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
 async def reloadterms(interaction: discord.Interaction):
     try:
         await interaction.response.defer(ephemeral=True)  # <-- defer immediately
@@ -668,6 +673,8 @@ async def define(interaction: discord.Interaction, term: str):
 
 @tree.command(name="setfrequency", description="Set the post frequency in hours for this server.")
 @app_commands.describe(hours="Number of hours between posts")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
 async def setfrequency(interaction: discord.Interaction, hours: int):
     if hours <= 0:
         await interaction.response.send_message("Frequency must be a positive integer.", ephemeral=True)
@@ -676,11 +683,15 @@ async def setfrequency(interaction: discord.Interaction, hours: int):
     await interaction.response.send_message(f"Frequency set to {hours} hour(s).", ephemeral=True)
 
 @tree.command(name="disableposting", description="Stop scheduled brevity term posts in this server.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
 async def disableposting(interaction: discord.Interaction):
     await disable_posting(interaction.guild.id)
     await interaction.response.send_message("Scheduled posting disabled.", ephemeral=True)
 
 @tree.command(name="enableposting", description="Resume scheduled brevity term posts in this server.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
 async def enableposting(interaction: discord.Interaction):
     await enable_posting(interaction.guild.id)
     await interaction.response.send_message("Scheduled posting enabled.", ephemeral=True)
@@ -738,6 +749,7 @@ class PublicQuizView(discord.ui.View):
 
 @tree.command(name="quiz", description="Start a multiple-choice quiz on brevity terms")
 @app_commands.describe(questions="Number of questions to answer", mode="Quiz mode: public (poll in channel) or private (ephemeral message)", duration="Total quiz duration in minutes (public mode only)")
+@app_commands.guild_only()
 async def quiz(
     interaction: discord.Interaction,
     questions: int = 1,
@@ -1178,6 +1190,7 @@ async def quiz(
     asyncio.create_task(close_and_summarize())
 # Greenie Board command
 @tree.command(name="greenieboard", description="Show the Greenie Board for this server (last 10 quizzes per user)")
+@app_commands.guild_only()
 async def greenieboard(interaction: discord.Interaction):
     guild_id = interaction.guild_id
     greenie_keys = await r.keys(f"greenie:{guild_id}:*")
@@ -1199,6 +1212,7 @@ async def greenieboard(interaction: discord.Interaction):
 
 
 @tree.command(name="checkperms", description="Show the bot's effective permissions in this channel")
+@app_commands.guild_only()
 async def checkperms(interaction: discord.Interaction):
     channel = interaction.channel
     if not channel:
