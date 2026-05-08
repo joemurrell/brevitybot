@@ -26,6 +26,7 @@ Required environment variables (in `.env`):
 - `REDIS_URL` — Redis connection URL (required, bot won't start without it)
 - `FLICKR_API_KEY` — Flickr API key for jet images in term posts (optional)
 - `LOG_LEVEL` — Logging verbosity, default `INFO`
+- `LOG_FORMAT` — `text` (default, plain message) or `json` (one JSON object per line with `extra={...}` fields)
 - `HEALTH_CHECK_PORT` — HTTP health check port, default `8080`
 - `STARTUP_DELAY` — Seconds to wait before connecting, default `0` (used on Railway to prevent rapid-restart rate limits)
 - `USER_AGENT` — Custom UA for Wikipedia scraping (optional)
@@ -67,6 +68,10 @@ The entire bot is a single file: `brevitybot.py`. There are no modules, packages
 | `greenie:{guild_id}:{user_id}` | list | Last 10 quiz results as JSON `{correct, total, ts}` |
 | `quiz:{quiz_id}:answers:{q_idx}` | hash | `user_id` → answer index for public quiz scoring |
 | `last_command_sync` | string | Unix timestamp of last slash command sync (1-hour cooldown) |
+| `reloadterms_cooldown` | string (TTL) | Sentinel key with TTL — global cooldown for `/reloadterms` |
+| `active_quiz:{guild_id}` | string (TTL) | Per-guild concurrency lock (acquired via `SET NX EX`) for public quizzes |
+| `quiz_user_cooldown:{user_id}` | string (TTL) | Per-user 60s cooldown after starting a quiz |
+| `quiz:{quiz_id}:meta` | string JSON (TTL) | Quiz state for restart-resumable summaries — guild_id, channel_id, deadline, options, correct indices, message ids |
 
 ### Slash command sync
 
@@ -87,4 +92,4 @@ Every data access function takes a `guild_id` parameter. The `post_brevity_term`
   ```
 - Guild-scoped operations: always pass `guild_id` (as int) when reading/writing Redis; never mix up `str`/`int` guild IDs (Redis stores them as strings, code converts at boundaries).
 - Logging uses the custom `brevitybot` logger (`logger = logging.getLogger("brevitybot")`). The `CustomFormatter` strips timestamps and level tags — Railway captures structured output separately.
-- `test_*` files are gitignored — test files are not committed to the repository.
+- Tests live in `tests/` and cover the pure helpers (`clean_term`, `pick_single_definition`, `sanitize_definition_for_quiz`, `_parse_terms_from_content`, `_truncate_code_block`, plus module-surface checks). Run with `pytest tests/`. Root-level throwaway test files matching `/test_*` are still gitignored for local scratch use.
