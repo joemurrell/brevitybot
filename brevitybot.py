@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import discord
 from discord.ext import tasks
 from discord import app_commands
@@ -17,6 +19,7 @@ import sys
 from datetime import timedelta
 import asyncio
 import textwrap
+from typing import Any, Optional, TypedDict
 
 # Load environment variables from a .env file before anything else
 load_dotenv()
@@ -25,16 +28,59 @@ load_dotenv()
 # LOGGING
 # -------------------------------
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+# LOG_FORMAT=text (default) preserves the previous Railway-friendly plain
+# message output. LOG_FORMAT=json emits one JSON object per line with all
+# `extra={...}` fields included — useful when piping into a log aggregator.
+LOG_FORMAT = os.getenv("LOG_FORMAT", "text").lower()
+
+# Reserved LogRecord attribute names — anything in record.__dict__ NOT in this
+# set is treated as a structured field added via `extra={...}`.
+_LOG_RESERVED_ATTRS = frozenset({
+    "args", "asctime", "created", "exc_info", "exc_text", "filename",
+    "funcName", "levelname", "levelno", "lineno", "message", "module",
+    "msecs", "msg", "name", "pathname", "process", "processName",
+    "relativeCreated", "stack_info", "thread", "threadName", "taskName",
+})
+
 
 class MaxLevelFilter(logging.Filter):
-    def __init__(self, level):
+    def __init__(self, level: int):
         self.level = level
-    def filter(self, record):
+
+    def filter(self, record: logging.LogRecord) -> bool:
         return record.levelno <= self.level
 
-# Formatter for consistent, readable logs
-log_format = "[%(asctime)s] [%(levelname)-8s] %(name)s: %(message)s"
-formatter = logging.Formatter(log_format)
+
+class CustomFormatter(logging.Formatter):
+    """Plain-text formatter — strips all decoration so Railway's own log
+    aggregator owns timestamps + level routing."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return record.getMessage()
+
+
+class JSONFormatter(logging.Formatter):
+    """One JSON object per log line. Includes `extra={...}` fields verbatim
+    so e.g. {"event": "term_posted", "guild_id": 123, ...} is queryable."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, Any] = {
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        for key, value in record.__dict__.items():
+            if key in _LOG_RESERVED_ATTRS or key.startswith("_"):
+                continue
+            try:
+                json.dumps(value)  # confirm serializable
+            except (TypeError, ValueError):
+                value = repr(value)
+            payload[key] = value
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(payload)
+
 
 stdout_handler = logging.StreamHandler(sys.stdout)
 stdout_handler.setLevel(logging.INFO)
@@ -43,13 +89,7 @@ stdout_handler.addFilter(MaxLevelFilter(logging.INFO))
 stderr_handler = logging.StreamHandler(sys.stderr)
 stderr_handler.setLevel(logging.WARNING)
 
-class CustomFormatter(logging.Formatter):
-    def format(self, record):
-        # For Railway, remove all [LEVEL] tags and timestamps from all logs
-        return f"{record.getMessage()}"
-
-formatter = CustomFormatter()
-
+formatter = JSONFormatter() if LOG_FORMAT == "json" else CustomFormatter()
 stdout_handler.setFormatter(formatter)
 stderr_handler.setFormatter(formatter)
 
@@ -152,6 +192,38 @@ DISABLED_GUILDS_KEY = "disabled_posting"
 WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code"
 RELOAD_COOLDOWN_KEY = "reloadterms_cooldown"
 RELOAD_COOLDOWN_SECONDS = 600  # 10 minutes
+ACTIVE_QUIZ_KEY_PREFIX = "active_quiz:"
+QUIZ_USER_COOLDOWN_KEY_PREFIX = "quiz_user_cooldown:"
+QUIZ_USER_COOLDOWN_SECONDS = 60
+
+
+# -------------------------------
+# TYPES
+# -------------------------------
+class Term(TypedDict):
+    term: str
+    definition: str
+
+
+class QuizOption(TypedDict, total=False):
+    term: str
+    definition: str
+    is_correct: bool
+    display: str
+
+
+class QuizMeta(TypedDict):
+    guild_id: Optional[int]
+    channel_id: Optional[int]
+    initiator_id: int
+    initiator_name: str
+    deadline: float
+    duration: int
+    quiz_terms: list[Term]
+    used_options: list[list[QuizOption]]
+    correct_indices: list[int]
+    question_types: list[str]
+    message_ids: list[int]
 
 # In-memory term cache. Populated lazily by get_all_terms (and primed in
 # on_ready), invalidated by update_brevity_terms. The TTL is a multi-instance
@@ -188,15 +260,17 @@ tree = app_commands.CommandTree(client)
 # -------------------------------
 # UTILITIES
 # -------------------------------
-def clean_term(term):
+def clean_term(term: str) -> str:
     # Retain square brackets for terms but remove them for definitions
     cleaned = term.replace("*", "").strip()
     return cleaned
 
-async def load_used_terms(guild_id):
+
+async def load_used_terms(guild_id: int) -> list[str]:
     return list(await r.smembers(f"used_terms:{guild_id}"))
 
-async def save_used_term(guild_id, term):
+
+async def save_used_term(guild_id: int, term: str) -> int:
     """Add a term to the used-set. Returns 1 if newly added, 0 if it was already there.
 
     The return value lets concurrent callers detect when another worker
@@ -207,11 +281,12 @@ async def save_used_term(guild_id, term):
         logger.info("Saved used term '%s' for guild %s", term, guild_id)
     return added
 
-async def save_config(guild_id, channel_id):
+async def save_config(guild_id: int, channel_id: int) -> None:
     await r.hset(CHANNEL_MAP_KEY, str(guild_id), channel_id)
     logger.info("Saved config: guild %s -> channel %s", guild_id, channel_id)
 
-async def load_config(guild_id=None):
+
+async def load_config(guild_id: Optional[int] = None) -> Any:
     if guild_id:
         channel_id = await r.hget(CHANNEL_MAP_KEY, str(guild_id))
         return {"channel_id": int(channel_id)} if channel_id else None
@@ -219,24 +294,30 @@ async def load_config(guild_id=None):
         all_configs = await r.hgetall(CHANNEL_MAP_KEY)
         return {gid: {"channel_id": int(cid)} for gid, cid in all_configs.items()}
 
-async def set_post_frequency(guild_id, hours):
+
+async def set_post_frequency(guild_id: int, hours: int) -> None:
     await r.set(f"{FREQ_KEY_PREFIX}{guild_id}", hours)
     logger.info("Set post frequency for guild %s to %s hours", guild_id, hours)
 
-async def get_post_frequency(guild_id):
+
+async def get_post_frequency(guild_id: int) -> int:
     return int(await r.get(f"{FREQ_KEY_PREFIX}{guild_id}") or 24)
 
-async def set_last_posted(guild_id, timestamp):
+
+async def set_last_posted(guild_id: int, timestamp: float) -> None:
     await r.set(f"{LAST_POSTED_KEY_PREFIX}{guild_id}", str(timestamp))
 
-async def get_last_posted(guild_id):
+
+async def get_last_posted(guild_id: int) -> float:
     ts = await r.get(f"{LAST_POSTED_KEY_PREFIX}{guild_id}")
     return float(ts) if ts else 0.0
 
-async def is_posting_enabled(guild_id):
+
+async def is_posting_enabled(guild_id: int) -> bool:
     return not await r.sismember(DISABLED_GUILDS_KEY, str(guild_id))
 
-async def enable_posting(guild_id):
+
+async def enable_posting(guild_id: int) -> None:
     await r.srem(DISABLED_GUILDS_KEY, str(guild_id))
     
     # Initialize last_posted if not set, so the first post happens after the configured interval
@@ -247,12 +328,12 @@ async def enable_posting(guild_id):
     
     logger.info("Posting enabled for guild %s", guild_id)
 
-async def disable_posting(guild_id):
+async def disable_posting(guild_id: int) -> None:
     await r.sadd(DISABLED_GUILDS_KEY, str(guild_id))
     logger.info("Posting disabled for guild %s", guild_id)
 
 
-async def get_random_flickr_jet(api_key):
+async def get_random_flickr_jet(api_key: Optional[str]) -> Optional[str]:
     flickr_url = "https://www.flickr.com/services/rest/"
     params = {
         "method": "flickr.photos.search",
@@ -367,7 +448,14 @@ def pick_single_definition(defn: str) -> str:
     return defn
 
 
-def build_quiz_question(current, all_terms, *, title, footer, with_timestamp=False):
+def build_quiz_question(
+    current: Term,
+    all_terms: list[Term],
+    *,
+    title: str,
+    footer: str,
+    with_timestamp: bool = False,
+) -> tuple[discord.Embed, list[QuizOption], int, str]:
     """Build a multiple-choice quiz question.
 
     `current` is the term being tested; `all_terms` is the full term list (the
@@ -435,7 +523,7 @@ def build_quiz_question(current, all_terms, *, title, footer, with_timestamp=Fal
     return embed, options, correct_idx, question_type
 
 
-async def parse_brevity_terms():
+async def parse_brevity_terms() -> list[Term]:
 
     url = WIKIPEDIA_URL
     # Use a polite, identifiable User-Agent. Allow override via USER_AGENT env var.
@@ -476,7 +564,7 @@ async def parse_brevity_terms():
     return _parse_terms_from_content(content or b"")
 
 
-def _parse_terms_from_content(content):
+def _parse_terms_from_content(content: bytes | str) -> list[Term]:
     """Extract `[{term, definition}]` from a Wikipedia HTML page body.
 
     Walks only <dl> blocks (definition lists) and stops at h2 headers like
@@ -565,7 +653,7 @@ def _parse_terms_from_content(content):
     return terms
 
 
-async def update_brevity_terms():
+async def update_brevity_terms() -> tuple[int, int, int]:
     logger.info("Refreshing brevity terms from Wikipedia...")
     new_terms = await parse_brevity_terms()
 
@@ -608,7 +696,7 @@ async def update_brevity_terms():
 
     return len(new_terms), len(added_terms), len(updated_terms)
 
-async def get_all_terms():
+async def get_all_terms() -> list[Term]:
     """Return the cached brevity-terms list, fetching from Redis on miss.
 
     The cache lives in this process and is invalidated locally when
@@ -634,7 +722,7 @@ async def get_all_terms():
     return parsed
 
 
-def _invalidate_terms_cache():
+def _invalidate_terms_cache() -> None:
     global _terms_cache, _terms_cache_at
     _terms_cache = None
     _terms_cache_at = 0.0
@@ -659,7 +747,12 @@ def _truncate_code_block(text: str, limit: int) -> str:
     return OPEN + inner[:max_inner] + MARKER + CLOSE
 
 
-async def build_greenie_board_text(guild, user_greenies, name_col: int = 14, as_field: bool = False):
+async def build_greenie_board_text(
+    guild: Optional[discord.Guild],
+    user_greenies: list[tuple[str, list[dict[str, Any]], float]],
+    name_col: int = 14,
+    as_field: bool = False,
+) -> str:
     """Return the Greenie Board text.
     If `as_field` is False (default) returns a decorated message with header + code block suitable
     for sending as a normal message. If `as_field` is True, returns only a code-block string that
@@ -737,7 +830,7 @@ async def build_greenie_board_text(guild, user_greenies, name_col: int = 14, as_
     board_code = f"{header}\n{code_block}"
     return board_code
 
-async def get_next_brevity_term(guild_id):
+async def get_next_brevity_term(guild_id: int) -> Optional[Term]:
     all_terms = await get_all_terms()
     if not all_terms:
         logger.warning("No brevity terms available.")
@@ -766,7 +859,7 @@ async def get_next_brevity_term(guild_id):
     return chosen
 
 
-async def get_brevity_term_by_name(name):
+async def get_brevity_term_by_name(name: str) -> Optional[Term]:
     for term in await get_all_terms():
         if term["term"].lower() == name.lower():
             return term
@@ -973,18 +1066,21 @@ def _make_quiz_view(quiz_id: str, q_idx: int) -> discord.ui.View:
     return view
 
 
-async def _cleanup_quiz_keys(quiz_id: str, num_questions: int):
-    """Delete a quiz's meta + per-question answer hashes."""
+async def _cleanup_quiz_keys(quiz_id: str, num_questions: int, guild_id: Optional[int] = None) -> None:
+    """Delete a quiz's meta + per-question answer hashes, plus the per-guild
+    active-quiz lock if guild_id is provided."""
     try:
         keys = [f"quiz:{quiz_id}:answers:{i}" for i in range(num_questions)]
         keys.append(f"quiz:{quiz_id}:meta")
+        if guild_id is not None:
+            keys.append(f"{ACTIVE_QUIZ_KEY_PREFIX}{guild_id}")
         await r.delete(*keys)
-        logger.info("Cleaned up keys for quiz_id=%s", quiz_id)
+        logger.info("Cleaned up keys for quiz_id=%s", quiz_id, extra={"quiz_id": quiz_id})
     except Exception:
-        logger.exception("Failed to clean up quiz keys for quiz_id=%s", quiz_id)
+        logger.exception("Failed to clean up quiz keys for quiz_id=%s", quiz_id, extra={"quiz_id": quiz_id})
 
 
-async def close_and_summarize(quiz_id: str):
+async def close_and_summarize(quiz_id: str) -> None:
     """Sleep until a quiz's deadline, then post the summary embed and clean up.
 
     Reads all per-quiz state from quiz:{quiz_id}:meta so it can be resumed
@@ -1018,8 +1114,12 @@ async def close_and_summarize(quiz_id: str):
     guild = client.get_guild(guild_id) if guild_id else None
     channel = client.get_channel(meta["channel_id"])
     if channel is None:
-        logger.error("Channel %s not found for quiz_id=%s; abandoning summary", meta["channel_id"], quiz_id)
-        await _cleanup_quiz_keys(quiz_id, n)
+        logger.error(
+            "Channel %s not found for quiz_id=%s; abandoning summary",
+            meta["channel_id"], quiz_id,
+            extra={"quiz_id": quiz_id, "guild_id": guild_id, "channel_id": meta["channel_id"]},
+        )
+        await _cleanup_quiz_keys(quiz_id, n, guild_id=guild_id)
         return
 
     results_embed = discord.Embed(title="Brevity Quiz Results", color=discord.Color.green())
@@ -1103,7 +1203,7 @@ async def close_and_summarize(quiz_id: str):
     except Exception:
         logger.exception("Failed to post quiz results for quiz_id=%s", quiz_id)
 
-    await _cleanup_quiz_keys(quiz_id, n)
+    await _cleanup_quiz_keys(quiz_id, n, guild_id=guild_id)
 
 @tree.command(name="quiz", description="Start a multiple-choice quiz on brevity terms")
 @app_commands.describe(questions="Number of questions to answer", mode="Quiz mode: public (poll in channel) or private (ephemeral message)", duration="Total quiz duration in minutes (public mode only)")
@@ -1114,7 +1214,16 @@ async def quiz(
     mode: str = "private",
     duration: int = 2
 ):
-    logger.info(f"/quiz invoked by user={interaction.user.id} guild={interaction.guild_id} questions={questions} mode={mode} duration={duration}")
+    logger.info(
+        "/quiz invoked",
+        extra={
+            "user_id": interaction.user.id,
+            "guild_id": interaction.guild_id,
+            "questions": questions,
+            "mode": mode,
+            "duration": duration,
+        },
+    )
 
     # Defer immediately so we never miss Discord's 3-second response deadline.
     # Private mode replies ephemerally; public mode replies in-channel.
@@ -1123,6 +1232,16 @@ async def quiz(
         await interaction.response.defer(ephemeral=is_private, thinking=True)
     except discord.NotFound:
         logger.warning("Interaction expired before defer could happen.")
+        return
+
+    # Per-user cooldown to prevent rapid /quiz spam.
+    cd_key = f"{QUIZ_USER_COOLDOWN_KEY_PREFIX}{interaction.user.id}"
+    cd_remaining = await r.ttl(cd_key)
+    if cd_remaining > 0:
+        await interaction.followup.send(
+            f"You started a quiz recently. Try again in {cd_remaining}s.",
+            ephemeral=True,
+        )
         return
 
     all_terms = await get_all_terms()
@@ -1199,6 +1318,20 @@ async def quiz(
     # PUBLIC MODE: post all questions at once, keep open for total duration
     import time
     quiz_id = f"{interaction.guild_id or 'guild'}-{interaction.user.id}-{int(time.time())}"
+
+    # Per-guild concurrency lock: only one public quiz at a time per server.
+    # Atomic SET NX EX so two simultaneous /quiz invocations can't both win.
+    active_lock_key = f"{ACTIVE_QUIZ_KEY_PREFIX}{interaction.guild_id}"
+    acquired = await r.set(
+        active_lock_key, quiz_id, nx=True, ex=duration * 60 + 3600
+    )
+    if not acquired:
+        await interaction.followup.send(
+            "There's already an active public quiz in this server. Wait for it to finish.",
+            ephemeral=True,
+        )
+        return
+
     embeds = []
     views = []
     correct_indices = []
@@ -1228,6 +1361,7 @@ async def quiz(
     # Defensive checks before sending to capture permission issues early
     if channel is None:
         logger.error("interaction.channel is None for guild=%s user=%s", interaction.guild_id, interaction.user.id)
+        await r.delete(active_lock_key)  # release lock so user can retry
         await interaction.followup.send("Couldn't determine the channel to post the quiz in. Please run this command in a server text channel.", ephemeral=True)
         return
 
@@ -1245,6 +1379,7 @@ async def quiz(
         await interaction.followup.send(embed=start_embed, ephemeral=False)
     except Exception as e:
         logger.error("Failed to send start embed: %s", e)
+        await r.delete(active_lock_key)  # release lock so user can retry
         try:
             await interaction.followup.send("Couldn't announce the quiz; check my permissions.", ephemeral=True)
         except Exception:
@@ -1295,14 +1430,18 @@ async def quiz(
                 )
 
             # Response was already deferred at the top, so always use followup.
+            await r.delete(active_lock_key)  # release lock so user can retry
             try:
                 await interaction.followup.send(user_msg, ephemeral=True)
             except Exception:
                 logger.error("Also failed to send ephemeral response to the user about missing access.")
             return
-        
+
         messages.append(msg)
-        logger.info("Posted quiz message id=%s quiz_id=%s q_index=%d", msg.id, quiz_id, idx)
+        logger.info(
+            "Posted quiz message",
+            extra={"message_id": msg.id, "quiz_id": quiz_id, "q_idx": idx, "guild_id": interaction.guild_id},
+        )
 
     # Persist quiz state so close_and_summarize can resume after a bot restart.
     # The TTL outlives the deadline by an hour for safety; close_and_summarize
@@ -1329,6 +1468,12 @@ async def quiz(
         )
     except Exception:
         logger.exception("Failed to persist quiz meta for quiz_id=%s", quiz_id)
+    # Per-user cooldown applied only after a successful quiz start so a
+    # validation-failed attempt doesn't penalize the user.
+    try:
+        await r.set(cd_key, "1", ex=QUIZ_USER_COOLDOWN_SECONDS)
+    except Exception:
+        logger.exception("Failed to set user cooldown for user=%s", interaction.user.id)
     asyncio.create_task(close_and_summarize(quiz_id))
 # Greenie Board command
 @tree.command(name="greenieboard", description="Show the Greenie Board for this server (last 10 quizzes per user)")

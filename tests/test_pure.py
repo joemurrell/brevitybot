@@ -10,6 +10,10 @@ import pytest
 
 import brevitybot
 from brevitybot import (
+    JSONFormatter,
+    Term,
+    QuizMeta,
+    QuizOption,
     build_quiz_question,
     clean_term,
     pick_single_definition,
@@ -450,6 +454,91 @@ class TestBuildQuizQuestion:
 
 
 # -------------------------------
+# JSONFormatter
+# -------------------------------
+class TestJSONFormatter:
+    def _record(self, msg, level=20, extra=None):
+        import logging
+        record = logging.LogRecord(
+            name="brevitybot.test", level=level, pathname=__file__, lineno=1,
+            msg=msg, args=(), exc_info=None,
+        )
+        if extra:
+            for k, v in extra.items():
+                setattr(record, k, v)
+        return record
+
+    def test_emits_valid_json(self):
+        import json as _json
+        out = JSONFormatter().format(self._record("hello world"))
+        parsed = _json.loads(out)
+        assert parsed["message"] == "hello world"
+        assert parsed["level"] == "INFO"
+        assert parsed["logger"] == "brevitybot.test"
+
+    def test_extra_fields_included(self):
+        import json as _json
+        out = JSONFormatter().format(
+            self._record("vote", extra={"guild_id": 42, "user_id": 99, "quiz_id": "q1"})
+        )
+        parsed = _json.loads(out)
+        assert parsed["guild_id"] == 42
+        assert parsed["user_id"] == 99
+        assert parsed["quiz_id"] == "q1"
+
+    def test_unserializable_extra_falls_back_to_repr(self):
+        import json as _json
+        class Weird:
+            def __repr__(self):
+                return "<Weird>"
+        out = JSONFormatter().format(self._record("x", extra={"obj": Weird()}))
+        parsed = _json.loads(out)
+        assert parsed["obj"] == "<Weird>"
+
+    def test_reserved_log_attrs_not_emitted(self):
+        import json as _json
+        out = JSONFormatter().format(self._record("hi"))
+        parsed = _json.loads(out)
+        # We don't want noisy reserved fields in the JSON output.
+        for noisy in ("args", "msg", "lineno", "pathname", "filename"):
+            assert noisy not in parsed
+
+
+# -------------------------------
+# TypedDict surface
+# -------------------------------
+class TestTypedDicts:
+    def test_term_typeddict_accepts_dict(self):
+        # TypedDict is a runtime-friendly type alias; building from a dict
+        # literal must work and round-trip cleanly.
+        t: Term = {"term": "FOO", "definition": "Foo def."}
+        assert t["term"] == "FOO"
+
+    def test_quiz_option_typeddict_accepts_partial(self):
+        # total=False allows some keys to be omitted (display is set later).
+        o: QuizOption = {"term": "FOO", "definition": "x", "is_correct": True}
+        assert o["is_correct"] is True
+
+    def test_quiz_meta_round_trips_via_json(self):
+        import json as _json
+        meta: QuizMeta = {
+            "guild_id": 1,
+            "channel_id": 2,
+            "initiator_id": 3,
+            "initiator_name": "tester",
+            "deadline": 1234.5,
+            "duration": 5,
+            "quiz_terms": [{"term": "FOO", "definition": "x"}],
+            "used_options": [[{"term": "A", "definition": "a", "is_correct": False, "display": "a"}]],
+            "correct_indices": [0],
+            "question_types": ["term_to_definition"],
+            "message_ids": [99],
+        }
+        round_tripped = _json.loads(_json.dumps(meta))
+        assert round_tripped == meta
+
+
+# -------------------------------
 # Module surface checks
 # -------------------------------
 class TestModuleSurface:
@@ -469,6 +558,13 @@ class TestModuleSurface:
             "_make_quiz_view",
             "close_and_summarize",
             "_cleanup_quiz_keys",
+            "JSONFormatter",
+            "Term",
+            "QuizOption",
+            "QuizMeta",
+            "ACTIVE_QUIZ_KEY_PREFIX",
+            "QUIZ_USER_COOLDOWN_KEY_PREFIX",
+            "QUIZ_USER_COOLDOWN_SECONDS",
         ]:
             assert hasattr(brevitybot, name), f"missing {name}"
 
