@@ -166,7 +166,23 @@ _TERMS_CACHE_TTL = 300
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
-client = discord.Client(intents=intents)
+
+
+class BrevityClient(discord.Client):
+    """discord.Client subclass that runs one-time async init via setup_hook.
+
+    on_ready can fire multiple times (every reconnect), so anything that
+    must run exactly once — Redis connect, cache prime, dynamic-item
+    registration, resuming in-flight quizzes, slash-command sync, starting
+    background tasks, binding the health-check HTTP port — belongs in
+    setup_hook, not in on_ready.
+    """
+
+    async def setup_hook(self):
+        await _bot_setup(self)
+
+
+client = BrevityClient(intents=intents)
 tree = app_commands.CommandTree(client)
 
 # -------------------------------
@@ -1478,26 +1494,40 @@ async def checkperms(interaction: discord.Interaction):
 @tasks.loop(minutes=5)
 async def post_brevity_term():
     all_configs = await load_config()
-    for guild_id_str, config in all_configs.items():
+    if not all_configs:
+        return
+
+    # Batch all per-guild reads up-front so the per-tick Redis cost is
+    # constant in the number of guilds, not 3N (was: SISMEMBER + 2 GETs per
+    # guild). Three calls total: HGETALL channel map + SMEMBERS disabled set
+    # + 2 MGETs (freq/last_posted).
+    guild_id_strs = list(all_configs.keys())
+    disabled_guilds = await r.smembers(DISABLED_GUILDS_KEY)
+    freq_keys = [f"{FREQ_KEY_PREFIX}{gid}" for gid in guild_id_strs]
+    last_keys = [f"{LAST_POSTED_KEY_PREFIX}{gid}" for gid in guild_id_strs]
+    freq_values = await r.mget(freq_keys) if freq_keys else []
+    last_values = await r.mget(last_keys) if last_keys else []
+
+    current_time = time.time()
+    for i, guild_id_str in enumerate(guild_id_strs):
         try:
+            config = all_configs[guild_id_str]
             guild_id = int(guild_id_str)
-            if not await is_posting_enabled(guild_id):
+            if guild_id_str in disabled_guilds:
                 continue
 
-            freq_hours = await get_post_frequency(guild_id)
-            last_posted = await get_last_posted(guild_id)
-            
+            freq_hours = int(freq_values[i]) if freq_values[i] is not None else 24
+            last_posted = float(last_values[i]) if last_values[i] is not None else 0.0
+
             # Handle uninitialized or invalid last_posted timestamp
-            # If last_posted is 0 or before Jan 1, 2020, treat as uninitialized
-            if last_posted < 1577836800:  # Jan 1, 2020 timestamp
+            # (0 or before Jan 1 2020 means we've never posted for this guild).
+            if last_posted < 1577836800:
                 logger.info("Uninitialized last_posted for guild %s, posting immediately", guild_id)
-                # Post immediately by setting next_post_time to now
-                next_post_time = time.time()
+                next_post_time = current_time
             else:
                 next_post_time = last_posted + (freq_hours * 3600)
 
-            # Check if it's time to post (allowing a ±5-minute window)
-            current_time = time.time()
+            # ±5-minute window
             if current_time < next_post_time - 300:
                 continue
 
@@ -1546,13 +1576,22 @@ async def log_bot_stats():
 # Track if we've already synced commands to avoid rate limits
 _commands_synced = False
 
-@client.event
-async def on_ready():
+
+async def _bot_setup(bot: discord.Client):
+    """One-time async initialization. Called from BrevityClient.setup_hook,
+    which runs exactly once during startup — unlike on_ready, which can
+    fire multiple times on reconnects."""
     global r, _commands_synced
-    # Initialize async Redis connection
+
+    # Initialize async Redis connection. health_check_interval pings idle
+    # connections every 30s so half-closed sockets get detected and
+    # reconnected (Railway connection drops are common). max_connections
+    # bounds the pool to prevent connection leaks under burst load.
     r = await aioredis.from_url(
         redis_url,
-        decode_responses=True
+        decode_responses=True,
+        max_connections=20,
+        health_check_interval=30,
     )
     logger.info("Connected to Redis at %s:%s", parsed_url.hostname, parsed_url.port)
 
@@ -1564,7 +1603,7 @@ async def on_ready():
     # Register the persistent QuizButton handler so public-quiz buttons
     # posted before this restart keep working, then resume any in-flight
     # close_and_summarize tasks for those quizzes.
-    client.add_dynamic_items(QuizButton)
+    bot.add_dynamic_items(QuizButton)
     logger.info("Registered QuizButton dynamic item")
     resumed = 0
     async for key in r.scan_iter(match="quiz:*:meta", count=100):
@@ -1576,19 +1615,13 @@ async def on_ready():
     if resumed:
         logger.info("Resumed %d in-flight quiz summary task(s)", resumed)
 
-    logger.info("Logged in as %s (ID: %s)", client.user.name, client.user.id)
-    
-    # Only sync commands if needed, with rate limit protection
-    # Check both in-memory flag and Redis timestamp to handle restarts
+    # Only sync commands if needed, with rate limit protection.
     last_sync_ts = await r.get("last_command_sync")
     current_time = time.time()
-    
-    # Only sync if: not synced this session AND (never synced OR >1 hour since last sync)
     should_sync = not _commands_synced and (
-        last_sync_ts is None or 
-        (current_time - float(last_sync_ts)) > 3600  # 1 hour cooldown
+        last_sync_ts is None or
+        (current_time - float(last_sync_ts)) > 3600
     )
-    
     if should_sync:
         logger.info("Syncing slash commands...")
         try:
@@ -1597,25 +1630,23 @@ async def on_ready():
             await r.set("last_command_sync", str(current_time))
             logger.info("Slash commands synced successfully")
         except discord.HTTPException as e:
-            if e.status == 429:  # Rate limited
+            if e.status == 429:
                 logger.warning("Command sync rate limited. Cooling down for an hour across restarts.")
-                _commands_synced = True  # Don't retry this session
-                # Persist the timestamp so a fast crash-loop restart doesn't keep
-                # hammering the rate limit before the cooldown expires.
+                _commands_synced = True
                 await r.set("last_command_sync", str(current_time))
             else:
                 logger.error("Failed to sync commands: %s", e)
-                _commands_synced = True  # Don't retry this session to avoid repeated errors
+                _commands_synced = True
         except Exception as e:
             logger.error("Unexpected error syncing commands: %s", e)
-            _commands_synced = True  # Don't retry this session
+            _commands_synced = True
     else:
         if last_sync_ts:
             time_since = int(current_time - float(last_sync_ts))
             logger.info("Skipping command sync (last synced %d seconds ago)", time_since)
         else:
             logger.info("Skipping command sync (already synced this session)")
-    
+
     if not post_brevity_term.is_running():
         post_brevity_term.start()
     if not refresh_terms_daily.is_running():
@@ -1623,8 +1654,16 @@ async def on_ready():
     if not log_bot_stats.is_running():
         log_bot_stats.start()
 
-    # Start health check HTTP server for Railway
+    # Start health check HTTP server for Railway. Bound here in setup_hook
+    # rather than on_ready so a websocket reconnect doesn't try to rebind
+    # the port.
     await start_health_check_server()
+
+
+@client.event
+async def on_ready():
+    # Reconnect-safe: only logs. All one-time setup runs in setup_hook above.
+    logger.info("Logged in as %s (ID: %s)", client.user.name, client.user.id)
 
 
 @client.event
