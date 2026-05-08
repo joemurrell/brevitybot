@@ -150,6 +150,8 @@ FREQ_KEY_PREFIX = "post_freq:"
 LAST_POSTED_KEY_PREFIX = "last_posted:"
 DISABLED_GUILDS_KEY = "disabled_posting"
 WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code"
+RELOAD_COOLDOWN_KEY = "reloadterms_cooldown"
+RELOAD_COOLDOWN_SECONDS = 600  # 10 minutes
 
 # In-memory term cache. Populated lazily by get_all_terms (and primed in
 # on_ready), invalidated by update_brevity_terms. The TTL is a multi-instance
@@ -741,7 +743,20 @@ async def reloadterms(interaction: discord.Interaction):
         logger.warning("Interaction expired before defer could happen.")
         return
 
+    # Global cooldown — terms are a single shared key, so multiple admins (across
+    # guilds) reloading in quick succession would just hammer Wikipedia for the
+    # same content. The cooldown is enforced via TTL on a sentinel key.
+    cooldown_remaining = await r.ttl(RELOAD_COOLDOWN_KEY)
+    if cooldown_remaining > 0:
+        await interaction.followup.send(
+            f"Brevity terms were just reloaded. Try again in {cooldown_remaining}s "
+            f"(global cooldown to avoid hammering Wikipedia).",
+            ephemeral=True,
+        )
+        return
+
     total, added, updated = await update_brevity_terms()
+    await r.set(RELOAD_COOLDOWN_KEY, "1", ex=RELOAD_COOLDOWN_SECONDS)
     await interaction.followup.send(
         f"Terms synced from Wiki. Added: {added}. Updated: {updated}. Total: {total}.", ephemeral=True
     )

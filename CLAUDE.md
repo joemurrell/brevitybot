@@ -67,6 +67,7 @@ The entire bot is a single file: `brevitybot.py`. There are no modules, packages
 | `greenie:{guild_id}:{user_id}` | list | Last 10 quiz results as JSON `{correct, total, ts}` |
 | `quiz:{quiz_id}:answers:{q_idx}` | hash | `user_id` → answer index for public quiz scoring |
 | `last_command_sync` | string | Unix timestamp of last slash command sync (1-hour cooldown) |
+| `reloadterms_cooldown` | string (TTL) | Sentinel key with TTL — global cooldown for `/reloadterms` |
 
 ### Slash command sync
 
@@ -87,4 +88,4 @@ Every data access function takes a `guild_id` parameter. The `post_brevity_term`
   ```
 - Guild-scoped operations: always pass `guild_id` (as int) when reading/writing Redis; never mix up `str`/`int` guild IDs (Redis stores them as strings, code converts at boundaries).
 - Logging uses the custom `brevitybot` logger (`logger = logging.getLogger("brevitybot")`). The `CustomFormatter` strips timestamps and level tags — Railway captures structured output separately.
-- `test_*` files are gitignored — test files are not committed to the repository.
+- Tests live in `tests/` and cover the pure helpers (`clean_term`, `pick_single_definition`, `sanitize_definition_for_quiz`, `_parse_terms_from_content`, `_truncate_code_block`, plus module-surface checks). Run with `pytest tests/`. Root-level throwaway test files matching `/test_*` are still gitignored for local scratch use.
