@@ -886,56 +886,208 @@ async def enableposting(interaction: discord.Interaction):
     await enable_posting(interaction.guild.id)
     await interaction.response.send_message("Scheduled posting enabled.", ephemeral=True)
 
-class PublicQuizView(discord.ui.View):
-    def __init__(self, question_idx, correct_idx, quiz_id, redis_conn, ttl_seconds, timeout=None):
-        super().__init__(timeout=timeout)
-        self.question_idx = question_idx
-        self.correct_idx = correct_idx
-        self.quiz_id = quiz_id
-        self.redis_conn = redis_conn
-        # TTL on the answer hash so a bot crash mid-quiz doesn't leak the key forever.
-        self.ttl_seconds = ttl_seconds
-        self.answered_users = set()
+class QuizButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"q:(?P<quiz_id>[^:]+):(?P<q_idx>\d+):(?P<answer_idx>\d+)",
+):
+    """A persistent button for public-quiz answers.
 
-    async def handle_vote(self, interaction, answer_idx):
+    The custom_id encodes (quiz_id, q_idx, answer_idx), so after a bot
+    restart Discord can route a click straight to from_custom_id below
+    without us holding the original View instance in memory. Per-quiz
+    state lives in Redis under quiz:{quiz_id}:meta and answers go to
+    quiz:{quiz_id}:answers:{q_idx}.
+
+    Register the class once at startup with `client.add_dynamic_items(QuizButton)`.
+    """
+
+    LABELS = ("A", "B", "C", "D")
+
+    def __init__(self, quiz_id: str, q_idx: int, answer_idx: int):
+        super().__init__(
+            discord.ui.Button(
+                label=QuizButton.LABELS[answer_idx],
+                style=discord.ButtonStyle.primary,
+                custom_id=f"q:{quiz_id}:{q_idx}:{answer_idx}",
+            )
+        )
+        self.quiz_id = quiz_id
+        self.q_idx = q_idx
+        self.answer_idx = answer_idx
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["quiz_id"], int(match["q_idx"]), int(match["answer_idx"]))
+
+    async def callback(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
-        # Allow users to change their vote: always write the latest selection to Redis.
-        # Pipeline hset + expire so orphaned answer keys eventually expire.
+        key = f"quiz:{self.quiz_id}:answers:{self.q_idx}"
         try:
-            key = f"quiz:{self.quiz_id}:answers:{self.question_idx}"
-            async with self.redis_conn.pipeline(transaction=False) as pipe:
-                pipe.hset(key, user_id, answer_idx)
-                pipe.expire(key, self.ttl_seconds)
+            async with r.pipeline(transaction=False) as pipe:
+                pipe.hset(key, user_id, self.answer_idx)
+                # Refresh TTL so a vote near the deadline keeps the data alive
+                # for the summary task. 1h is comfortably longer than any quiz.
+                pipe.expire(key, 3600)
                 await pipe.execute()
         except Exception:
-            # Best-effort: ignore storage errors so we don't block the interaction
-            logger.exception("Failed to record vote for quiz %s q=%s user=%s", self.quiz_id, self.question_idx, user_id)
-        # Remember that this user has participated
-        self.answered_users.add(user_id)
-        option_labels = ["A", "B", "C", "D"]
-        q_number = self.question_idx + 1 if self.question_idx is not None else "?"
-        selected_label = option_labels[answer_idx] if 0 <= answer_idx < len(option_labels) else str(answer_idx)
-        # Acknowledge the selection. Components must respond; send an ephemeral confirmation.
+            logger.exception("Failed to record vote for quiz %s q=%s user=%s", self.quiz_id, self.q_idx, user_id)
+        label = QuizButton.LABELS[self.answer_idx]
         try:
-            await interaction.response.send_message(f"Q{q_number}: You selected {selected_label}", ephemeral=True)
+            await interaction.response.send_message(
+                f"Q{self.q_idx + 1}: You selected {label}", ephemeral=True
+            )
         except Exception:
-            # If the component interaction was already responded to for some reason, try a followup and otherwise ignore
             try:
-                await interaction.followup.send(f"Q{q_number}: You selected {selected_label}", ephemeral=True)
+                await interaction.followup.send(
+                    f"Q{self.q_idx + 1}: You selected {label}", ephemeral=True
+                )
             except Exception:
-                logger.debug("Could not acknowledge vote response for user %s (quiz %s q=%s)", user_id, self.quiz_id, self.question_idx)
+                logger.debug("Could not acknowledge vote for user %s (quiz %s q=%s)", user_id, self.quiz_id, self.q_idx)
 
-    @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
-    async def button_a(self, interaction, button): await self.handle_vote(interaction, 0)
 
-    @discord.ui.button(label="B", style=discord.ButtonStyle.primary)
-    async def button_b(self, interaction, button): await self.handle_vote(interaction, 1)
+def _make_quiz_view(quiz_id: str, q_idx: int) -> discord.ui.View:
+    """Build a fresh persistent View with 4 QuizButton instances.
 
-    @discord.ui.button(label="C", style=discord.ButtonStyle.primary)
-    async def button_c(self, interaction, button): await self.handle_vote(interaction, 2)
+    The View object itself isn't kept in memory after the message is sent —
+    Discord routes button clicks via the QuizButton custom_id pattern.
+    """
+    view = discord.ui.View(timeout=None)
+    for answer_idx in range(4):
+        view.add_item(QuizButton(quiz_id, q_idx, answer_idx))
+    return view
 
-    @discord.ui.button(label="D", style=discord.ButtonStyle.primary)
-    async def button_d(self, interaction, button): await self.handle_vote(interaction, 3)
+
+async def _cleanup_quiz_keys(quiz_id: str, num_questions: int):
+    """Delete a quiz's meta + per-question answer hashes."""
+    try:
+        keys = [f"quiz:{quiz_id}:answers:{i}" for i in range(num_questions)]
+        keys.append(f"quiz:{quiz_id}:meta")
+        await r.delete(*keys)
+        logger.info("Cleaned up keys for quiz_id=%s", quiz_id)
+    except Exception:
+        logger.exception("Failed to clean up quiz keys for quiz_id=%s", quiz_id)
+
+
+async def close_and_summarize(quiz_id: str):
+    """Sleep until a quiz's deadline, then post the summary embed and clean up.
+
+    Reads all per-quiz state from quiz:{quiz_id}:meta so it can be resumed
+    after a bot restart — on_ready scans for active quizzes and schedules
+    this task for each. If meta has expired (e.g. very long downtime), the
+    function exits silently.
+    """
+    meta_raw = await r.get(f"quiz:{quiz_id}:meta")
+    if not meta_raw:
+        logger.warning("close_and_summarize: no meta for quiz_id=%s; skipping", quiz_id)
+        return
+    try:
+        meta = json.loads(meta_raw)
+    except Exception:
+        logger.exception("close_and_summarize: bad meta JSON for quiz_id=%s", quiz_id)
+        return
+
+    delay = meta["deadline"] - time.time()
+    if delay > 0:
+        logger.info("close_and_summarize sleeping %.1fs until quiz %s deadline", delay, quiz_id)
+        await asyncio.sleep(delay)
+    logger.info("close_and_summarize starting for quiz_id=%s", quiz_id)
+
+    correct_indices = meta["correct_indices"]
+    used_options = meta["used_options"]
+    question_types = meta["question_types"]
+    quiz_terms = meta["quiz_terms"]
+    n = len(correct_indices)
+    guild_id = meta["guild_id"]
+
+    guild = client.get_guild(guild_id) if guild_id else None
+    channel = client.get_channel(meta["channel_id"])
+    if channel is None:
+        logger.error("Channel %s not found for quiz_id=%s; abandoning summary", meta["channel_id"], quiz_id)
+        await _cleanup_quiz_keys(quiz_id, n)
+        return
+
+    results_embed = discord.Embed(title="Brevity Quiz Results", color=discord.Color.green())
+    user_correct = {}
+    user_participation = set()
+    option_labels = ["A", "B", "C", "D"]
+
+    for i in range(n):
+        answers = await r.hgetall(f"quiz:{quiz_id}:answers:{i}")
+        logger.info("Fetched answers for quiz_id=%s q_index=%s count=%d", quiz_id, i, len(answers))
+        correct_idx = correct_indices[i]
+        for uid, idx in answers.items():
+            user_participation.add(uid)
+            if str(idx) == str(correct_idx):
+                user_correct[uid] = user_correct.get(uid, 0) + 1
+        correct_users = [uid for uid, idx in answers.items() if str(idx) == str(correct_idx)]
+        correct_mentions = ", ".join(f"<@{uid}>" for uid in correct_users) or "None"
+        term = quiz_terms[i]["term"]
+        opt = used_options[i][correct_idx]
+        question_type = question_types[i]
+        if question_type == "term_to_definition":
+            correct_answer_text = opt["definition"]
+            field_name = f"**Q{i+1}:** {term}"
+        else:
+            correct_answer_text = opt["term"]
+            d = quiz_terms[i]["definition"]
+            definition_short = d[:100] + "..." if len(d) > 100 else d
+            field_name = f"**Q{i+1}:** {definition_short}"
+        field_value = f"**Answer:**  **`{option_labels[correct_idx]}`** - {correct_answer_text}\n **Correct users:** {correct_mentions}\n"
+        results_embed.add_field(name=field_name, value=field_value, inline=False)
+        await asyncio.sleep(0)
+
+    # Save each user's result to Redis (capped at 10) — pipelined LPUSH+LTRIM.
+    total = n
+    for uid in user_participation:
+        correct = user_correct.get(uid, 0)
+        entry = json.dumps({"correct": correct, "total": total, "ts": int(time.time())})
+        key = f"greenie:{guild_id}:{uid}"
+        async with r.pipeline(transaction=True) as pipe:
+            pipe.lpush(key, entry)
+            pipe.ltrim(key, 0, 9)
+            await pipe.execute()
+        logger.info("Saved greenie entry for guild=%s user=%s -> %d/%d", guild_id, uid, correct, total)
+        await asyncio.sleep(0)
+
+    if user_correct:
+        leaderboard = sorted(user_correct.items(), key=lambda x: -x[1])
+        leaderboard_lines = [f"<@{uid}> got {correct}/{total} ({int(100 * correct / total)}%)"
+                             for uid, correct in leaderboard]
+        results_embed.add_field(name="​", value="​", inline=False)
+        results_embed.add_field(name="Quiz Leaderboard", value="\n".join(leaderboard_lines), inline=False)
+    else:
+        results_embed.add_field(name="​", value="​", inline=False)
+        results_embed.add_field(name="Quiz Leaderboard", value="No correct answers this round.", inline=False)
+
+    # Greenie Board
+    greenie_keys = [k async for k in r.scan_iter(match=f"greenie:{guild_id}:*", count=100)]
+    user_greenies = []
+    for key in greenie_keys:
+        uid = key.split(":")[-1]
+        entries = [json.loads(e) for e in await r.lrange(key, 0, 9)]
+        if entries:
+            avg = sum(e["correct"] / e["total"] for e in entries) / len(entries)
+            user_greenies.append((uid, entries, avg))
+        await asyncio.sleep(0)
+    user_greenies.sort(key=lambda x: (-x[2], -max(e["ts"] for e in x[1])))
+    try:
+        board_field = await build_greenie_board_text(guild, user_greenies, as_field=True)
+        board_field = _truncate_code_block(board_field, 1024)
+        results_embed.add_field(name="​", value="​", inline=False)
+        results_embed.add_field(name="Greenie Board (Last 10 quizzes)", value=board_field, inline=False)
+    except Exception:
+        logger.exception("Failed to build greenie board during quiz summary")
+
+    logger.info("Sending summary embed for quiz_id=%s to channel=%s", quiz_id, channel.id)
+    try:
+        await channel.send(embed=results_embed)
+        logger.info("Successfully posted quiz results for quiz_id=%s", quiz_id)
+    except discord.Forbidden:
+        logger.error("Bot lacks permissions to post quiz results in channel=%s", channel.id)
+    except Exception:
+        logger.exception("Failed to post quiz results for quiz_id=%s", quiz_id)
+
+    await _cleanup_quiz_keys(quiz_id, n)
 
 @tree.command(name="quiz", description="Start a multiple-choice quiz on brevity terms")
 @app_commands.describe(questions="Number of questions to answer", mode="Quiz mode: public (poll in channel) or private (ephemeral message)", duration="Total quiz duration in minutes (public mode only)")
@@ -1049,9 +1201,7 @@ async def quiz(
             f"Built question {q_idx+1}/{questions} term='{current['term']}' "
             f"correct_idx={correct_idx} type={question_type}"
         )
-        # ttl outlives the quiz duration by 1h so a slightly delayed summary still
-        # finds the keys; close_and_summarize will delete them on success anyway.
-        view = PublicQuizView(q_idx, correct_idx, quiz_id, r, ttl_seconds=duration*60 + 3600, timeout=duration*60)
+        view = _make_quiz_view(quiz_id, q_idx)
         embeds.append(embed)
         views.append(view)
         used_options.append(options)
@@ -1135,144 +1285,35 @@ async def quiz(
                 logger.error("Also failed to send ephemeral response to the user about missing access.")
             return
         
-        # Store message reference for this view
-        view.message = msg
-        view.message_id = msg.id
         messages.append(msg)
-        logger.info(f"Posted quiz message id={msg.id} quiz_id={quiz_id} q_index={view.question_idx}")
+        logger.info("Posted quiz message id=%s quiz_id=%s q_index=%d", msg.id, quiz_id, idx)
 
-    # Start embed already sent above to allow followups; don't respond again here.
-
-    # Wait for the total duration, then collect and post results
-    from datetime import datetime, timedelta
-    async def close_and_summarize():
-        logger.info(f"close_and_summarize sleeping until timeout for quiz_id={quiz_id}")
-        await discord.utils.sleep_until(discord.utils.utcnow() + timedelta(seconds=duration*60))
-        logger.info(f"close_and_summarize started for quiz_id={quiz_id}")
-        # Build an embed for results instead of a long plain-text message
-        results_embed = discord.Embed(title="Brevity Quiz Results", color=discord.Color.green())
-        user_correct = {}  # user_id -> correct count for this quiz
-        user_participation = set()
-        for i, view in enumerate(views):
-            answers = await r.hgetall(f"quiz:{quiz_id}:answers:{i}")
-            logger.info(f"Fetched answers for quiz_id={quiz_id} q_index={i} count={len(answers)}")
-            correct_users = [uid for uid, idx in answers.items() if str(idx) == str(view.correct_idx)]
-            for uid, idx in answers.items():
-                user_participation.add(uid)
-                if str(idx) == str(view.correct_idx):
-                    user_correct[uid] = user_correct.get(uid, 0) + 1
-            correct_mentions = ", ".join(f"<@{uid}>" for uid in correct_users) or "None"
-            term = quiz_terms[i]["term"]
-            # Use the option text used in the multiple choice for the correct answer display
-            opt = used_options[i][view.correct_idx]
-            question_type = question_types[i]
-            
-            if question_type == "term_to_definition":
-                # Traditional format: question was term, answer was definition
-                correct_answer_text = opt["definition"]
-                field_name = f"**Q{i+1}:** {term}"
-            else:
-                # Inverse format: question was definition, answer was term
-                correct_answer_text = opt["term"]
-                definition_short = quiz_terms[i]["definition"][:100] + "..." if len(quiz_terms[i]["definition"]) > 100 else quiz_terms[i]["definition"]
-                field_name = f"**Q{i+1}:** {definition_short}"
-                
-            field_value = f"**Answer:**  **`{option_labels[view.correct_idx]}`** - {correct_answer_text}\n **Correct users:** {correct_mentions}\n"
-            results_embed.add_field(name=field_name, value=field_value, inline=False)
-            # Yield control periodically
-            await asyncio.sleep(0)
-
-        # Save each user's result to Redis (capped at 10)
-        total = len(views)
-        for uid in user_participation:
-            correct = user_correct.get(uid, 0)
-            entry = json.dumps({"correct": correct, "total": total, "ts": int(time.time())})
-            key = f"greenie:{interaction.guild_id}:{uid}"
-            # Pipeline so a concurrent reader can't observe an 11-entry list
-            # between LPUSH and LTRIM.
-            async with r.pipeline(transaction=True) as pipe:
-                pipe.lpush(key, entry)
-                pipe.ltrim(key, 0, 9)
-                await pipe.execute()
-            logger.info(f"Saved greenie entry for guild={interaction.guild_id} user={uid} -> {correct}/{total}")
-            await asyncio.sleep(0)
-
-        # Per-quiz leaderboard -> add as an embed field
-        if user_correct:
-            leaderboard = sorted(user_correct.items(), key=lambda x: -x[1])
-            leaderboard_lines = []
-            for uid, correct in leaderboard:
-                percent = int(100 * correct / total)
-                leaderboard_lines.append(f"<@{uid}> got {correct}/{total} ({percent}%)")
-            # add a blank field to visually separate question list from leaderboard
-            results_embed.add_field(name="\u200b", value="\u200b", inline=False)
-            results_embed.add_field(name="Quiz Leaderboard", value="\n".join(leaderboard_lines), inline=False)
-        else:
-            results_embed.add_field(name="\u200b", value="\u200b", inline=False)
-            results_embed.add_field(name="Quiz Leaderboard", value="No correct answers this round.", inline=False)
-
-        # Greenie Board (last 10 quizzes, 10 most recent users) -> add as an embed field
-        # SCAN instead of KEYS so we don't block Redis on large keyspaces.
-        greenie_keys = [k async for k in r.scan_iter(match=f"greenie:{interaction.guild_id}:*", count=100)]
-        user_greenies = []
-        for key in greenie_keys:
-            uid = key.split(":")[-1]
-            entries = [json.loads(e) for e in await r.lrange(key, 0, 9)]
-            if entries:
-                avg = sum(e["correct"] / e["total"] for e in entries) / len(entries)
-                user_greenies.append((uid, entries, avg))
-            await asyncio.sleep(0)
-        user_greenies.sort(key=lambda x: (-x[2], -max(e["ts"] for e in x[1])))
-        # Use the shared builder so the output matches /greenieboard exactly.
-        # Insert the board INTO the results embed as a code-block field.
-        try:
-            board_field = await build_greenie_board_text(interaction.guild, user_greenies, as_field=True)
-            # Embed fields must be <= 1024 characters. Truncate the inner
-            # content (between the code fences) so the closing ``` is preserved
-            # and Discord doesn't render the rest of the embed as a code block.
-            board_field = _truncate_code_block(board_field, 1024)
-            # add a blank field to visually separate leaderboard from greenie board
-            results_embed.add_field(name="\u200b", value="\u200b", inline=False)
-            results_embed.add_field(name="Greenie Board (Last 10 quizzes)", value=board_field, inline=False)
-        except Exception:
-            logger.exception("Failed to build greenie board during quiz summary")
-        logger.info(f"Sending summary embed for quiz_id={quiz_id} to channel={interaction.channel.id}")
-        
-        # Send the results embed with error handling for permission issues
-        try:
-            await interaction.channel.send(embed=results_embed)
-            logger.info(f"Successfully posted quiz results for quiz_id={quiz_id}")
-        except Exception as e:
-            # Log the error with context
-            logger.error("Failed to post quiz results to channel=%s guild=%s quiz_id=%s: %s", 
-                        getattr(interaction.channel, 'id', None), 
-                        getattr(interaction, 'guild_id', None),
-                        quiz_id, e)
-            
-            # Detect if it's a Forbidden (missing access) error
-            is_forbidden = False
-            try:
-                is_forbidden = isinstance(e, discord.Forbidden)
-            except Exception:
-                is_forbidden = e.__class__.__name__ == 'Forbidden'
-            
-            if is_forbidden:
-                logger.error("Bot lacks permissions to post quiz results. Required permissions: View Channels, Send Messages, Embed Links")
-            else:
-                logger.exception("Unexpected error posting quiz results")
-
-        # Best-effort cleanup of per-question answer hashes. The TTL set by
-        # PublicQuizView is the safety net if this code never runs.
-        try:
-            answer_keys = [f"quiz:{quiz_id}:answers:{i}" for i in range(len(views))]
-            if answer_keys:
-                await r.delete(*answer_keys)
-                logger.info("Cleaned up %d answer keys for quiz_id=%s", len(answer_keys), quiz_id)
-        except Exception:
-            logger.exception("Failed to clean up answer keys for quiz_id=%s", quiz_id)
-
-    # Schedule the summary task
-    asyncio.create_task(close_and_summarize())
+    # Persist quiz state so close_and_summarize can resume after a bot restart.
+    # The TTL outlives the deadline by an hour for safety; close_and_summarize
+    # deletes meta + answer keys explicitly on success.
+    deadline = time.time() + duration * 60
+    meta = {
+        "guild_id": interaction.guild_id,
+        "channel_id": getattr(interaction.channel, "id", None),
+        "initiator_id": interaction.user.id,
+        "initiator_name": interaction.user.display_name,
+        "deadline": deadline,
+        "duration": duration,
+        "quiz_terms": [{"term": t["term"], "definition": t["definition"]} for t in quiz_terms],
+        "used_options": used_options,
+        "correct_indices": correct_indices,
+        "question_types": question_types,
+        "message_ids": [m.id for m in messages],
+    }
+    try:
+        await r.set(
+            f"quiz:{quiz_id}:meta",
+            json.dumps(meta),
+            ex=duration * 60 + 3600,
+        )
+    except Exception:
+        logger.exception("Failed to persist quiz meta for quiz_id=%s", quiz_id)
+    asyncio.create_task(close_and_summarize(quiz_id))
 # Greenie Board command
 @tree.command(name="greenieboard", description="Show the Greenie Board for this server (last 10 quizzes per user)")
 @app_commands.guild_only()
@@ -1519,6 +1560,21 @@ async def on_ready():
     # eat the cold-cache penalty (~500-term JSON parse).
     primed = await get_all_terms()
     logger.info("Primed term cache with %d terms", len(primed))
+
+    # Register the persistent QuizButton handler so public-quiz buttons
+    # posted before this restart keep working, then resume any in-flight
+    # close_and_summarize tasks for those quizzes.
+    client.add_dynamic_items(QuizButton)
+    logger.info("Registered QuizButton dynamic item")
+    resumed = 0
+    async for key in r.scan_iter(match="quiz:*:meta", count=100):
+        # key is like "quiz:{quiz_id}:meta"; quiz_id may contain hyphens.
+        parts = key.split(":", 2)
+        if len(parts) >= 2:
+            asyncio.create_task(close_and_summarize(parts[1]))
+            resumed += 1
+    if resumed:
+        logger.info("Resumed %d in-flight quiz summary task(s)", resumed)
 
     logger.info("Logged in as %s (ID: %s)", client.user.name, client.user.id)
     

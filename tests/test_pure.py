@@ -465,16 +465,47 @@ class TestModuleSurface:
             "_truncate_code_block",
             "_invalidate_terms_cache",
             "WIKIPEDIA_URL",
+            "QuizButton",
+            "_make_quiz_view",
+            "close_and_summarize",
+            "_cleanup_quiz_keys",
         ]:
             assert hasattr(brevitybot, name), f"missing {name}"
 
-    def test_only_one_publicquizview(self):
-        assert sum(1 for n in dir(brevitybot) if n == "PublicQuizView") == 1
+    def test_quizbutton_is_dynamic_item(self):
+        """Per chunk (j): public-quiz buttons are persistent DynamicItems so
+        they survive bot restarts."""
+        import discord
+        assert hasattr(brevitybot, "QuizButton")
+        assert issubclass(brevitybot.QuizButton, discord.ui.DynamicItem)
 
-    def test_publicquizview_takes_ttl_seconds(self):
-        import inspect
-        sig = inspect.signature(brevitybot.PublicQuizView.__init__)
-        assert "ttl_seconds" in sig.parameters
+    def test_quizbutton_template_matches_expected_custom_id(self):
+        """The custom_id pattern must match the format we produce on send."""
+        import re
+        # Build a button instance and pull its custom_id from the underlying
+        # discord.ui.Button — confirms the template encodes (quiz_id, q_idx,
+        # answer_idx) in the round-trippable shape we depend on for
+        # from_custom_id at click time.
+        btn = brevitybot.QuizButton("test-guild-123-456", 2, 1)
+        cid = btn.item.custom_id
+        assert cid == "q:test-guild-123-456:2:1"
+        # The regex template should be able to parse what we just generated.
+        pattern = brevitybot.QuizButton.__discord_ui_compiled_template__
+        m = pattern.match(cid)
+        assert m is not None
+        assert m["quiz_id"] == "test-guild-123-456"
+        assert m["q_idx"] == "2"
+        assert m["answer_idx"] == "1"
+
+    def test_make_quiz_view_has_four_buttons(self):
+        view = brevitybot._make_quiz_view("qid", 0)
+        assert len(view.children) == 4
+        # Persistent views must have timeout=None
+        assert view.timeout is None
+        # Each child should be a QuizButton wrapping a Button
+        for i, child in enumerate(view.children):
+            assert isinstance(child, brevitybot.QuizButton)
+            assert child.answer_idx == i
 
     def test_command_admin_gates(self):
         """Per chunk (c): config commands must be admin-gated and guild-only."""
