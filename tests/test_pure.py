@@ -10,6 +10,7 @@ import pytest
 
 import brevitybot
 from brevitybot import (
+    build_quiz_question,
     clean_term,
     pick_single_definition,
     sanitize_definition_for_quiz,
@@ -307,6 +308,148 @@ class TestParseTerms:
 
 
 # -------------------------------
+# build_quiz_question
+# -------------------------------
+class TestBuildQuizQuestion:
+    """The shared helper used by both private and public /quiz modes."""
+
+    def _terms(self, n=10):
+        return [
+            {"term": f"TERM_{i}", "definition": f"Definition number {i} with text."}
+            for i in range(n)
+        ]
+
+    def test_returns_four_options(self):
+        random.seed(0)
+        terms = self._terms()
+        embed, options, _correct_idx, _qtype = build_quiz_question(
+            terms[0], terms, title="t", footer="f"
+        )
+        assert len(options) == 4
+
+    def test_exactly_one_correct_option(self):
+        random.seed(0)
+        terms = self._terms()
+        _embed, options, _correct_idx, _qtype = build_quiz_question(
+            terms[0], terms, title="t", footer="f"
+        )
+        assert sum(1 for o in options if o["is_correct"]) == 1
+
+    def test_correct_idx_points_to_correct_option(self):
+        random.seed(0)
+        terms = self._terms()
+        _embed, options, correct_idx, _qtype = build_quiz_question(
+            terms[0], terms, title="t", footer="f"
+        )
+        assert options[correct_idx]["is_correct"] is True
+
+    def test_correct_term_is_the_one_passed_in(self):
+        random.seed(0)
+        terms = self._terms()
+        _embed, options, correct_idx, _qtype = build_quiz_question(
+            terms[3], terms, title="t", footer="f"
+        )
+        assert options[correct_idx]["term"] == "TERM_3"
+
+    def test_distractors_are_distinct_from_correct(self):
+        random.seed(0)
+        terms = self._terms()
+        _embed, options, correct_idx, _qtype = build_quiz_question(
+            terms[0], terms, title="t", footer="f"
+        )
+        wrong = [o["term"] for i, o in enumerate(options) if i != correct_idx]
+        assert "TERM_0" not in wrong
+        # And distractors are distinct from each other
+        assert len(set(wrong)) == 3
+
+    def test_question_type_is_one_of_two_values(self):
+        for seed in range(20):
+            random.seed(seed)
+            terms = self._terms()
+            _embed, _options, _correct_idx, qtype = build_quiz_question(
+                terms[0], terms, title="t", footer="f"
+            )
+            assert qtype in ("term_to_definition", "definition_to_term")
+
+    def test_term_to_definition_masks_correct_term_in_options(self):
+        # Force question_type by seeding until we get term_to_definition.
+        for seed in range(50):
+            random.seed(seed)
+            terms = [
+                {"term": "GADABOUT", "definition": "GADABOUT is the term and GADABOUT appears."},
+                {"term": "OTHER1", "definition": "Other one."},
+                {"term": "OTHER2", "definition": "Other two."},
+                {"term": "OTHER3", "definition": "Other three."},
+            ]
+            _embed, options, correct_idx, qtype = build_quiz_question(
+                terms[0], terms, title="t", footer="f"
+            )
+            if qtype == "term_to_definition":
+                # The correct option's display must NOT contain the term name.
+                correct_display = options[correct_idx]["display"]
+                assert "GADABOUT" not in correct_display
+                return
+        pytest.fail("Never got term_to_definition in 50 seeds")
+
+    def test_options_have_display_field(self):
+        random.seed(0)
+        terms = self._terms()
+        _embed, options, _correct_idx, _qtype = build_quiz_question(
+            terms[0], terms, title="t", footer="f"
+        )
+        for o in options:
+            assert "display" in o
+
+    def test_embed_uses_passed_title_and_footer(self):
+        random.seed(0)
+        terms = self._terms()
+        embed, _options, _correct_idx, _qtype = build_quiz_question(
+            terms[0], terms, title="My Title", footer="My Footer"
+        )
+        assert embed.title == "My Title"
+        assert embed.footer.text == "My Footer"
+
+    def test_with_timestamp_sets_embed_timestamp(self):
+        random.seed(0)
+        terms = self._terms()
+        embed, _o, _c, _q = build_quiz_question(
+            terms[0], terms, title="t", footer="f", with_timestamp=True
+        )
+        assert embed.timestamp is not None
+
+    def test_without_timestamp_leaves_embed_timestamp_unset(self):
+        random.seed(0)
+        terms = self._terms()
+        embed, _o, _c, _q = build_quiz_question(
+            terms[0], terms, title="t", footer="f", with_timestamp=False
+        )
+        assert embed.timestamp is None
+
+    def test_embed_has_four_option_fields(self):
+        random.seed(0)
+        terms = self._terms()
+        embed, _o, _c, _q = build_quiz_question(
+            terms[0], terms, title="t", footer="f"
+        )
+        # Each of A/B/C/D is one field on the embed.
+        assert len(embed.fields) == 4
+
+    def test_deterministic_under_seed(self):
+        random.seed(99)
+        terms = self._terms(20)
+        _e1, opts1, idx1, qt1 = build_quiz_question(
+            terms[5], terms, title="t", footer="f"
+        )
+        random.seed(99)
+        _e2, opts2, idx2, qt2 = build_quiz_question(
+            terms[5], terms, title="t", footer="f"
+        )
+        assert qt1 == qt2
+        assert idx1 == idx2
+        assert [o["term"] for o in opts1] == [o["term"] for o in opts2]
+
+
+# -------------------------------
 # Module surface checks
 # -------------------------------
 class TestModuleSurface:
@@ -314,6 +457,7 @@ class TestModuleSurface:
 
     def test_exports_pure_helpers(self):
         for name in [
+            "build_quiz_question",
             "clean_term",
             "sanitize_definition_for_quiz",
             "pick_single_definition",
