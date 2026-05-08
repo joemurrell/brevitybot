@@ -87,4 +87,4 @@ Every data access function takes a `guild_id` parameter. The `post_brevity_term`
   ```
 - Guild-scoped operations: always pass `guild_id` (as int) when reading/writing Redis; never mix up `str`/`int` guild IDs (Redis stores them as strings, code converts at boundaries).
 - Logging uses the custom `brevitybot` logger (`logger = logging.getLogger("brevitybot")`). The `CustomFormatter` strips timestamps and level tags — Railway captures structured output separately.
-- `test_*` files are gitignored — test files are not committed to the repository.
+- Tests live in `tests/` and cover the pure helpers (`clean_term`, `pick_single_definition`, `sanitize_definition_for_quiz`, `_parse_terms_from_content`, `_truncate_code_block`, plus module-surface checks). Run with `pytest tests/`. Root-level throwaway test files matching `/test_*` are still gitignored for local scratch use.
