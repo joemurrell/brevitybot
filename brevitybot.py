@@ -907,7 +907,7 @@ async def nextterm(interaction: discord.Interaction):
     image_url = await get_random_flickr_jet(FLICKR_API_KEY)
     if image_url:
         embed.set_image(url=image_url)
-    embed.set_footer(text="From Wikipedia – Multi-service Tactical Brevity Code")
+    embed.set_footer(text="Multi-Service Tactics, Techniques, and Procedures for Multi-Service Brevity Codes - April 2025")
     await interaction.followup.send(embed=embed)
 
 @tree.command(name="reloadterms", description="Manually refresh brevity terms from Wikipedia.")
@@ -1695,7 +1695,7 @@ async def post_brevity_term():
             image_url = await get_random_flickr_jet(FLICKR_API_KEY)
             if image_url:
                 embed.set_image(url=image_url)
-            embed.set_footer(text="From Wikipedia – Multi-service Tactical Brevity Code")
+            embed.set_footer(text="Multi-Service Tactics, Techniques, and Procedures for Multi-Service Brevity Codes - April 2025")
 
             await channel.send(embed=embed)
             # Record the actual post time so future scheduling is based on when
