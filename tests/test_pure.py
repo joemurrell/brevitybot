@@ -4,7 +4,9 @@ These functions do no I/O (no Redis, no Discord, no HTTP) so they're fully
 unit-testable. The bootstrap in conftest.py sets the env vars brevitybot
 demands at import time.
 """
+import asyncio
 import random
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -623,3 +625,313 @@ class TestModuleSurface:
             cmd = brevitybot.tree.get_command(name)
             assert cmd is not None
             assert cmd.guild_only is False
+
+
+# -------------------------------
+# pick_single_definition — edge cases
+# -------------------------------
+class TestPickSingleDefinitionEdgeCases:
+    def test_all_non_letter_lines_returns_original(self):
+        """When every line/part contains no letters (only digits, punctuation),
+        pick_single_definition must fall back to returning the original string."""
+        defn = "123\n456\n789"
+        out = brevitybot.pick_single_definition(defn)
+        assert out == defn
+
+    def test_single_short_part_still_returned(self):
+        """A single numbered part that is just barely ≥5 chars and has letters
+        should be returned (no randomness needed)."""
+        out = brevitybot.pick_single_definition("1. Alpha.")
+        assert "Alpha" in out
+
+    def test_no_numbered_markers_returns_full_string(self):
+        """Multi-line input with no numbered markers is a single part, so the
+        whole string is returned unchanged (no split occurs)."""
+        defn = "First valid line.\nSecond valid line."
+        out = brevitybot.pick_single_definition(defn)
+        assert out == defn
+
+    def test_lines_fallback_when_numbered_parts_are_too_short(self):
+        """When numbered splitting produces only very short parts (< 5 chars),
+        good_parts stays empty and the lines fallback returns the original line."""
+        # "1. AB. 2. CD." splits into ["AB.", "CD."] — each only 3 chars → too
+        # short for good_parts; the lines fallback then picks from splitlines().
+        out = brevitybot.pick_single_definition("1. AB. 2. CD.")
+        assert out == "1. AB. 2. CD."
+
+
+# -------------------------------
+# _truncate_code_block — additional edge cases
+# -------------------------------
+class TestTruncateCodeBlockEdgeCases:
+    def test_limit_smaller_than_fence_overhead_falls_back(self):
+        """When limit < len('```\\n') + len('\\n```') + len('...') (= 11),
+        max_inner is negative and the function returns text[:limit]."""
+        big = "```\n" + ("x" * 50) + "\n```"
+        out = brevitybot._truncate_code_block(big, 5)
+        assert out == big[:5]
+        assert len(out) == 5
+
+
+# -------------------------------
+# _invalidate_terms_cache
+# -------------------------------
+class TestInvalidateTermsCache:
+    def test_resets_cache_to_none(self):
+        """_invalidate_terms_cache must set _terms_cache to None."""
+        brevitybot._terms_cache = [{"term": "FOO", "definition": "bar"}]
+        brevitybot._invalidate_terms_cache()
+        assert brevitybot._terms_cache is None
+
+    def test_resets_cache_timestamp_to_zero(self):
+        """_invalidate_terms_cache must reset the cache timestamp to 0.0."""
+        brevitybot._terms_cache_at = 9999999.0
+        brevitybot._invalidate_terms_cache()
+        assert brevitybot._terms_cache_at == 0.0
+
+
+# -------------------------------
+# _parse_terms_from_content — additional paths
+# -------------------------------
+class TestParseTermsAdditionalPaths:
+    def test_non_stop_h2_heading_continues_parsing(self):
+        """An <h2> whose text is NOT in the stop-list must not halt parsing;
+        terms after it should still be collected."""
+        html = """
+        <div class="mw-parser-output">
+          <h2>Introduction</h2>
+          <dl><dt>ALPHA</dt><dd>Alpha definition.</dd></dl>
+        </div>
+        """
+        terms = brevitybot._parse_terms_from_content(html)
+        assert any(t["term"] == "ALPHA" for t in terms)
+
+    def test_sup_in_dt_is_stripped(self):
+        """Citation <sup> tags inside a <dt> must be removed from the term name."""
+        html = """
+        <div class="mw-parser-output">
+          <dl><dt>FOO<sup>[1]</sup></dt><dd>Foo definition.</dd></dl>
+        </div>
+        """
+        terms = brevitybot._parse_terms_from_content(html)
+        assert terms[0]["term"] == "FOO"
+        assert "[1]" not in terms[0]["term"]
+
+    def test_span_in_dd_is_stripped(self):
+        """<span> elements inside a <dd> must not appear in the definition text."""
+        html = """
+        <div class="mw-parser-output">
+          <dl>
+            <dt>BAR</dt>
+            <dd>Bar body.<span class="mw-editsection">[edit]</span> Continued.</dd>
+          </dl>
+        </div>
+        """
+        terms = brevitybot._parse_terms_from_content(html)
+        assert "[edit]" not in terms[0]["definition"]
+        assert "Bar body" in terms[0]["definition"]
+        assert "Continued" in terms[0]["definition"]
+
+    def test_stops_at_footnotes(self):
+        """Parser must halt at an <h2>Footnotes</h2> section."""
+        html = """
+        <div class="mw-parser-output">
+          <dl><dt>REAL</dt><dd>Real def.</dd></dl>
+          <h2>Footnotes</h2>
+          <dl><dt>BOGUS</dt><dd>Bogus def.</dd></dl>
+        </div>
+        """
+        terms = brevitybot._parse_terms_from_content(html)
+        assert all(t["term"] != "BOGUS" for t in terms)
+        assert any(t["term"] == "REAL" for t in terms)
+
+    def test_wiki_link_markup_unwrapped(self):
+        """[[Target|Display]] markup in definition text is replaced with Display."""
+        html = """
+        <div class="mw-parser-output">
+          <dl>
+            <dt>LINK</dt>
+            <dd>See [[some article|the article]] for details.</dd>
+          </dl>
+        </div>
+        """
+        terms = brevitybot._parse_terms_from_content(html)
+        assert "the article" in terms[0]["definition"]
+        assert "[[" not in terms[0]["definition"]
+
+
+# -------------------------------
+# sanitize_definition_for_quiz — additional cases
+# -------------------------------
+class TestSanitizeForQuizAdditionalCases:
+    def test_bare_numeric_example_replaced(self):
+        """TERM 25 (no surrounding quotes) is replaced with [example]."""
+        out = brevitybot.sanitize_definition_for_quiz(
+            "Call GADABOUT 25 when ready.", term="GADABOUT"
+        )
+        assert "[example]" in out
+        assert "GADABOUT 25" not in out
+
+    def test_range_example_replaced(self):
+        """TERM 16-24 range notation is replaced with [example]."""
+        out = brevitybot.sanitize_definition_for_quiz(
+            "Altitude band is GADABOUT 16-24.", term="GADABOUT"
+        )
+        assert "[example]" in out
+        assert "GADABOUT 16-24" not in out
+
+    def test_multiline_definition_newlines_preserved(self):
+        """Newlines in the definition should survive masking so blockquote
+        formatting isn't destroyed."""
+        out = brevitybot.sanitize_definition_for_quiz(
+            "First line.\nSecond line without the term.", term="GADABOUT"
+        )
+        assert "\n" in out
+
+    def test_mask_length_at_least_six_underscores(self):
+        """Even a short two-letter term should be masked with ≥6 underscores."""
+        out = brevitybot.sanitize_definition_for_quiz("Go GO now.", term="GO")
+        # After normalization underscores are prefixed with two spaces
+        assert "______" in out
+
+
+# -------------------------------
+# build_greenie_board_text
+# -------------------------------
+class TestBuildGreeniesBoard:
+    """Tests for the greenie-board text builder.
+
+    Async calls are driven with asyncio.run() so we don't need pytest-asyncio
+    to be configured. The guild argument is a MagicMock so member lookups
+    resolve instantly without hitting Discord.
+    """
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def _entry(self, correct, total, ts=1_000_000):
+        return {"correct": correct, "total": total, "ts": ts}
+
+    def _guild(self, display_name="TestUser"):
+        guild = MagicMock()
+        member = MagicMock()
+        member.display_name = display_name
+        guild.get_member.return_value = member
+        return guild
+
+    def test_empty_list_contains_code_block(self):
+        result = self._run(brevitybot.build_greenie_board_text(None, []))
+        assert "```" in result
+
+    def test_as_field_false_includes_header(self):
+        result = self._run(
+            brevitybot.build_greenie_board_text(None, [], as_field=False)
+        )
+        assert result.startswith("**Greenie Board (Last 10 Quizzes):**")
+
+    def test_as_field_true_omits_header(self):
+        result = self._run(
+            brevitybot.build_greenie_board_text(None, [], as_field=True)
+        )
+        assert result.startswith("```")
+        assert "Greenie Board" not in result
+
+    def test_green_emoji_for_80_percent(self):
+        guild = self._guild("Ace")
+        entries = [self._entry(8, 10)]  # 80% → 🟢
+        result = self._run(
+            brevitybot.build_greenie_board_text(guild, [("1", entries, 0.8)])
+        )
+        assert "🟢" in result
+
+    def test_yellow_emoji_for_50_percent(self):
+        guild = self._guild("Mid")
+        entries = [self._entry(5, 10)]  # 50% → 🟡
+        result = self._run(
+            brevitybot.build_greenie_board_text(guild, [("1", entries, 0.5)])
+        )
+        assert "🟡" in result
+
+    def test_red_emoji_for_low_score(self):
+        guild = self._guild("Low")
+        entries = [self._entry(3, 10)]  # 30% → 🔴
+        result = self._run(
+            brevitybot.build_greenie_board_text(guild, [("1", entries, 0.3)])
+        )
+        assert "🔴" in result
+
+    def test_blank_slots_padded_with_white_square(self):
+        """Fewer than 10 quiz results → remaining slots filled with ⬜."""
+        guild = self._guild("Ace")
+        entries = [self._entry(10, 10)]  # only 1 entry
+        result = self._run(
+            brevitybot.build_greenie_board_text(guild, [("1", entries, 1.0)])
+        )
+        assert "⬜" in result
+        assert result.count("⬜") == 9  # 10 - 1 = 9 blank slots
+
+    def test_name_truncated_when_longer_than_12(self):
+        """Names with more than 12 characters are trimmed to 11 chars + '…'."""
+        guild = self._guild("VeryLongUsername")  # 16 chars
+        entries = [self._entry(10, 10)]
+        result = self._run(
+            brevitybot.build_greenie_board_text(guild, [("1", entries, 1.0)])
+        )
+        assert "…" in result
+        assert "VeryLongUsername" not in result
+
+    def test_short_name_shown_in_full(self):
+        """Names with ≤12 characters appear unchanged."""
+        guild = self._guild("ShortName")  # 9 chars
+        entries = [self._entry(10, 10)]
+        result = self._run(
+            brevitybot.build_greenie_board_text(guild, [("1", entries, 1.0)])
+        )
+        assert "ShortName" in result
+
+    def test_percentage_shown_in_output(self):
+        """Average percentage is displayed in the output line."""
+        guild = self._guild("User")
+        entries = [self._entry(7, 10), self._entry(8, 10)]
+        avg = (0.7 + 0.8) / 2  # 75%
+        result = self._run(
+            brevitybot.build_greenie_board_text(guild, [("1", entries, avg)])
+        )
+        assert "75%" in result
+
+    def test_zero_total_entry_shows_red(self):
+        """An entry with total=0 must not crash and must produce a 🔴."""
+        guild = self._guild("User")
+        entries = [self._entry(0, 0)]  # total=0, pct falls back to 0
+        result = self._run(
+            brevitybot.build_greenie_board_text(guild, [("1", entries, 0.0)])
+        )
+        assert "🔴" in result
+
+    def test_caps_output_at_ten_users(self):
+        """When more than 10 users are supplied, only the first 10 appear."""
+        guild = self._guild("User")
+        user_greenies = [
+            (str(i), [self._entry(10, 10)], 1.0) for i in range(12)
+        ]
+        result = self._run(
+            brevitybot.build_greenie_board_text(guild, user_greenies)
+        )
+        # One row per user inside the code block (each row contains "|")
+        lines = [ln for ln in result.splitlines() if "|" in ln]
+        assert len(lines) == 10
+
+    def test_guild_none_falls_back_to_client_user_lookup(self):
+        """Passing guild=None skips guild.get_member and uses client.get_user."""
+        mock_user = MagicMock()
+        mock_user.name = "CachedUser"
+        original_get_user = brevitybot.client.get_user
+        try:
+            brevitybot.client.get_user = MagicMock(return_value=mock_user)
+            entries = [self._entry(10, 10)]
+            result = self._run(
+                brevitybot.build_greenie_board_text(None, [("99", entries, 1.0)])
+            )
+            assert "CachedUser" in result
+        finally:
+            brevitybot.client.get_user = original_get_user
