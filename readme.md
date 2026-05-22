@@ -1,8 +1,8 @@
 # BrevityBot
 
-A Discord bot that teaches the tactical brevity codes used in military aviation — short, standardized radio terms like *SHACKLE*, *BOGEY*, and *FOX TWO*. BrevityBot posts terms on a schedule, lets you look up definitions on demand, and quizzes you to help the codes stick.
+A Discord bot that helps flight sim squadrons and individual pilots learn the tactical brevity codes used in military aviation — short, standardized radio terms like SHACKLE, BOGEY, and FOX TWO. Built for steady practice, BrevityBot reinforces the codes through scheduled daily terms, on-demand lookups, and quizzes so they become second nature on the radio.
 
-The terms come from the multi-service brevity standard maintained by the [Air Land Sea Space Application (ALSSA) Center](https://www.alssa.mil/) — *Multi-Service Tactics, Techniques, and Procedures for Multi-Service Brevity Codes* (ATP 1-02.1 / MCRP 3-30B.1 / NTTP 6-02.1 / AFTTP 3-2.5 / STTP 3-9002).
+The terms are sourced from the publicly available multi-service brevity standard *Multi-Service Tactics, Techniques, and Procedures for Multi-Service Brevity Codes* (ATP 1-02.1 / MCRP 3-30B.1 / NTTP 6-02.1 / AFTTP 3-2.5 / STTP 3-9002) maintained by the [Air Land Sea Space Application (ALSSA) Center](https://www.alssa.mil/).
 
 <p align="center">
   <img src="assets/brevity_cover.png" alt="ALSSA Multi-Service Brevity Codes (April 2025) cover" width="320">
