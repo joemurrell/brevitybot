@@ -1030,6 +1030,31 @@ class QuizButton(
 
     async def callback(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
+        # Reject votes after the quiz deadline has passed. Once the summary
+        # task runs it deletes meta, so a missing key also means "closed."
+        meta_raw = await r.get(f"quiz:{self.quiz_id}:meta")
+        closed = False
+        if not meta_raw:
+            closed = True
+        else:
+            try:
+                if time.time() >= json.loads(meta_raw)["deadline"]:
+                    closed = True
+            except Exception:
+                logger.exception("QuizButton: bad meta JSON for quiz_id=%s", self.quiz_id)
+        if closed:
+            try:
+                await interaction.response.send_message(
+                    "This quiz has ended — your answer wasn't recorded.", ephemeral=True
+                )
+            except Exception:
+                try:
+                    await interaction.followup.send(
+                        "This quiz has ended — your answer wasn't recorded.", ephemeral=True
+                    )
+                except Exception:
+                    logger.debug("Could not notify user %s of closed quiz %s", user_id, self.quiz_id)
+            return
         key = f"quiz:{self.quiz_id}:answers:{self.q_idx}"
         try:
             async with r.pipeline(transaction=False) as pipe:
