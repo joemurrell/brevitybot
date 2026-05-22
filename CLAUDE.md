@@ -11,15 +11,15 @@ pip install -r requirements.txt
 # Run the bot
 python brevitybot.py
 
-# Run tests (test files are gitignored with pattern test_*)
-pytest
+# Run the test suite
+pytest tests/
 
-# Run a single test file
-pytest test_myfile.py
-
-# Run a single test function
-pytest test_myfile.py::test_function_name
+# Run a single test class or test
+pytest tests/test_pure.py::TestParseTerms
+pytest tests/test_pure.py::TestParseTerms::test_nested_ul_no_duplication
 ```
+
+GitHub Actions runs `pytest tests/` on every PR to `main` and every push to `main` via `.github/workflows/tests.yml`.
 
 Required environment variables (in `.env`):
 - `DISCORD_BOT_TOKEN` — Discord bot token (required, bot won't start without it)
@@ -37,22 +37,25 @@ The entire bot is a single file: `brevitybot.py`. There are no modules, packages
 
 ### Core components
 
-**Discord client** — Uses `discord.Client` + `app_commands.CommandTree` (not `commands.Bot`). All slash commands are registered directly on the global `tree` object using `@tree.command(...)`. The client is initialized with `intents.message_content = True` and `intents.guilds = True`.
+**Discord client** — Custom subclass `BrevityClient(discord.Client)` + `app_commands.CommandTree` (not `commands.Bot`). All slash commands are registered directly on the global `tree` object using `@tree.command(...)`. Intents: `message_content = True`, `guilds = True`. One-time async init lives in `BrevityClient.setup_hook()` (which fires exactly once); `on_ready` is reconnect-safe and only logs.
 
-**Redis** — All state is stored in Redis. The `r` global is `None` at import time and initialized to an `aioredis` connection in `on_ready()`. Every function that touches Redis must run after `on_ready`.
+**Redis** — All state is stored in Redis. The `r` global is `None` at import time and initialized to an `aioredis` connection in `setup_hook()` with `max_connections=20` and `health_check_interval=30` so half-closed sockets on Railway get detected and reconnected. Every function that touches Redis must run after `setup_hook`.
 
-**Health check server** — An `aiohttp.web` HTTP server starts in `on_ready()` on `HEALTH_CHECK_PORT`, serving `GET /health` and `GET /`. Used by Railway for deployment health checks.
+**In-memory term cache** — `get_all_terms()` caches the parsed `brevity_terms` list in the module global `_terms_cache` with a 5-minute TTL backstop (multi-instance safety). `update_brevity_terms()` invalidates the cache locally on a successful write via `_invalidate_terms_cache()`. The cache is primed in `setup_hook` so the first interaction post-deploy doesn't pay the cold-cache cost. Speeds up autocomplete (fires per keystroke) dramatically.
 
-**Background tasks** — Three `@tasks.loop()` tasks started in `on_ready()`:
-- `post_brevity_term` — runs every 5 minutes, checks all configured guilds for overdue posts
-- `refresh_terms_daily` — runs every 24 hours, re-scrapes Wikipedia
-- `log_bot_stats` — runs every hour, logs server count and command usage
+**Health check server** — An `aiohttp.web` HTTP server starts in `setup_hook()` on `HEALTH_CHECK_PORT`, serving `GET /health` and `GET /`. Used by Railway for deployment health checks. Bound in `setup_hook` rather than `on_ready` so a websocket reconnect doesn't try to rebind the port.
 
-**Term scraping** — `parse_brevity_terms()` fetches the Wikipedia multiservice tactical brevity code page, parses `<dt>`/`<dd>` tag pairs into term/definition dicts, and returns a list. `update_brevity_terms()` diffs against stored terms and saves to Redis.
+**Background tasks** — Three `@tasks.loop()` tasks started in `setup_hook()`:
+- `post_brevity_term` — runs every 5 minutes; reads channel map + disabled set + freq/last-posted in batched calls (`HGETALL` + `SMEMBERS` + 2× `MGET` = 4 calls regardless of guild count), then iterates the batched data to decide who's due.
+- `refresh_terms_daily` — runs every 24 hours, re-scrapes Wikipedia via `parse_brevity_terms()`.
+- `log_bot_stats` — runs every hour, logs server count.
 
-**Quiz system** — Two modes:
-- *Private*: sequential async question flow using nested `ask_question()` coroutine, ephemeral messages, in-process score tracking
-- *Public*: all questions posted at once as channel messages with `PublicQuizView` button components; answers stored per-question in Redis; results posted after `duration` minutes via `asyncio.create_task(close_and_summarize())`
+**Term scraping** — `parse_brevity_terms()` fetches the Wikipedia multi-service tactical brevity code page; the actual parsing is in `_parse_terms_from_content(content)`, a pure helper (no I/O) that's fully unit-testable. It walks only top-level `<dl>` blocks, iterating their direct `<dt>/<dd>` children; nested `<ul>/<ol>/<dl>` are extracted from `<dd>`s before `get_text()` so bullets aren't duplicated, and stray lists outside any `<dl>` can't be glued onto the previous term. `update_brevity_terms()` diffs against stored terms, atomically backups + writes via a `MULTI/EXEC` pipeline, then invalidates the cache.
+
+**Quiz system** — Both modes share `build_quiz_question(current, all_terms, *, title, footer, with_timestamp=False)`, which returns `(embed, options, correct_idx, question_type)`. Each mode supplies its own embed styling.
+
+- *Private*: ephemeral, single-user. `ask_question(q_idx, parent_interaction=None)` threads each button-click's interaction forward so subsequent questions use a fresh 15-minute token (not the original slash-command interaction). Per-question view timeout = 300 s.
+- *Public*: persistent. Buttons are `QuizButton(discord.ui.DynamicItem)` instances; Discord routes clicks by custom_id pattern `q:{quiz_id}:{q_idx}:{answer_idx}`, so they keep working after a bot restart. Full quiz state is persisted to `quiz:{quiz_id}:meta` (JSON). `close_and_summarize(quiz_id)` is a top-level async function that reads everything from Redis — `setup_hook` scans for active quizzes and reschedules summaries after a restart. Per-guild concurrency lock (`active_quiz:{guild_id}`, atomic `SET NX EX`) prevents two simultaneous public quizzes; per-user 60 s cooldown prevents rapid spam. `/quizstop` (Manage Messages) cancels in-flight; `/quizpurge` (Manage Server) clears a stale lock but refuses if meta still exists.
 
 ### Redis key schema
 
@@ -75,21 +78,30 @@ The entire bot is a single file: `brevitybot.py`. There are no modules, packages
 
 ### Slash command sync
 
-Commands are synced globally in `on_ready()` with a 1-hour cooldown enforced via Redis (`last_command_sync` key) to avoid Discord rate limits. The in-memory `_commands_synced` flag prevents double-syncs within a single session.
+Commands are synced globally in `setup_hook()` with a 1-hour cooldown enforced via Redis (`last_command_sync` key) to avoid Discord rate limits. The in-memory `_commands_synced` flag prevents double-syncs within a single session, and the Redis timestamp is also written on rate-limited paths so a crash-loop restart honors the cooldown.
+
+When a deploy changes command signatures or permission gates and you want the change to appear in the slash picker immediately (not after the 1-hour cooldown elapses): `redis-cli DEL last_command_sync` before restart.
 
 ### Multi-guild design
 
-Every data access function takes a `guild_id` parameter. The `post_brevity_term` background task iterates all configured guilds from the `post_channels` hash. The scheduling window is ±5 minutes (the task loops every 5 minutes and posts if `current_time >= next_post_time - 300`).
+Every data access function takes a `guild_id` parameter (typed `int`). The `post_brevity_term` background task iterates all configured guilds from the `post_channels` hash. The scheduling window is ±5 minutes (the task loops every 5 minutes and posts if `current_time >= next_post_time - 300`). All per-guild Redis reads inside the tick are batched (`HGETALL` + `SMEMBERS` + 2× `MGET`), so the per-tick cost is constant in the number of guilds, not 3N.
+
+`get_next_brevity_term(guild_id)` is race-aware: it uses `SADD`'s return value to detect when another caller (e.g. concurrent `/nextterm` + scheduled post, or a multi-instance deploy) claimed the same term, and retries up to 5 × with a refreshed used-set.
 
 ## Key conventions
 
 - All I/O is async/await — never use blocking calls (`requests`, `time.sleep`) inside coroutines except at startup before `client.run()`.
-- Always `defer` interactions before any `await` that could take more than ~2 seconds:
+- Always `defer` interactions before any `await` that could take more than ~2 seconds. Defer is the *first* thing a slash command does, before validation or Redis reads, so the 3-second response deadline can never fire:
   ```python
-  await interaction.response.defer(thinking=True)  # or ephemeral=True
-  # ... do work ...
+  await interaction.response.defer(ephemeral=True, thinking=True)
+  # ... validate, read Redis, do work ...
   await interaction.followup.send(...)
   ```
+- One-time async init goes in `BrevityClient.setup_hook()`, not `on_ready` (which can fire on every reconnect). `setup_hook` runs exactly once after login but before the websocket connects.
 - Guild-scoped operations: always pass `guild_id` (as int) when reading/writing Redis; never mix up `str`/`int` guild IDs (Redis stores them as strings, code converts at boundaries).
-- Logging uses the custom `brevitybot` logger (`logger = logging.getLogger("brevitybot")`). The `CustomFormatter` strips timestamps and level tags — Railway captures structured output separately.
-- Tests live in `tests/` and cover the pure helpers (`clean_term`, `pick_single_definition`, `sanitize_definition_for_quiz`, `_parse_terms_from_content`, `_truncate_code_block`, plus module-surface checks). Run with `pytest tests/`. Root-level throwaway test files matching `/test_*` are still gitignored for local scratch use.
+- Persistent UI components extend `discord.ui.DynamicItem` so Discord can route clicks by `custom_id` regex after a bot restart — no in-memory view registry needed. See `QuizButton` for the pattern.
+- Type hints: `from __future__ import annotations` at the top of the file; `Term`, `QuizOption`, `QuizMeta` are `TypedDict`s. Annotate new public helpers; runtime behavior of TypedDict literals is "just a dict".
+- Multi-step Redis writes that must be observed together use `r.pipeline(transaction=True)` (`MULTI/EXEC`) — e.g. backup + replace in `update_brevity_terms`, `LPUSH` + `LTRIM` per-greenie. Iteration over Redis keyspaces uses `r.scan_iter(match=..., count=100)` — never `KEYS`.
+- Logging uses the custom `brevitybot` logger (`logger = logging.getLogger("brevitybot")`). `LOG_FORMAT=text` (default) uses `CustomFormatter` — plain message, Railway captures timestamps and level separately. `LOG_FORMAT=json` switches to `JSONFormatter` which emits one JSON object per line including any `extra={...}` fields (e.g. `extra={"guild_id":..., "quiz_id":...}`).
+- Slash-command permission gates are enforced server-side by Discord via `@app_commands.default_permissions(...)` decorators: `manage_guild` for config-mutating commands (`/setup`, `/setfrequency`, `/disableposting`, `/enableposting`, `/reloadterms`, `/quizpurge`), `manage_messages` for moderation (`/quizstop`). `@app_commands.guild_only()` is on every command except `/define` (which works in DMs since it has no guild dependency).
+- Tests live in `tests/` and cover the pure helpers (`clean_term`, `pick_single_definition`, `sanitize_definition_for_quiz`, `_parse_terms_from_content`, `_truncate_code_block`, `build_quiz_question`, `JSONFormatter`, the `Term`/`QuizOption`/`QuizMeta` TypedDicts) plus module-surface and admin-gate checks. `tests/conftest.py` sets `DISCORD_BOT_TOKEN` + `REDIS_URL` env vars before importing brevitybot (which validates them at import time) and stubs `discord.Client.run`. Run with `pytest tests/`. Root-level throwaway test files matching `/test_*` are still gitignored for local scratch use.
