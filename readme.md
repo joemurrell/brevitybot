@@ -1,77 +1,66 @@
 # BrevityBot
 
-A Discord bot that teaches tactical brevity codes used in military aviation—complete with definitions, quizzes, and optional images. Automatically fetches 500+ terms from Wikipedia and posts them on a customizable schedule per server.
+A Discord bot that teaches the tactical brevity codes used in military aviation — short, standardized radio terms like *SHACKLE*, *BOGEY*, and *FOX TWO*. BrevityBot posts terms on a schedule, lets you look up definitions on demand, and quizzes you to help the codes stick.
 
-## ✨ Features
+The terms come from the multi-service brevity standard maintained by the [Air Land Sea Space Application (ALSSA) Center](https://www.alssa.mil/) — *Multi-Service Tactics, Techniques, and Procedures for Multi-Service Brevity Codes* (ATP 1-02.1 / MCRP 3-30B.1 / NTTP 6-02.1 / AFTTP 3-2.5 / STTP 3-9002).
 
-### 📚 Term Management
-- **Automatic Daily Posts** — Schedule brevity terms to post automatically at custom intervals
-- **Manual Posting** — Request the next term on demand
-- **Smart Rotation** — Never repeats terms until all have been posted
-- **Wikipedia Integration** — Automatically fetches and caches 500+ terms from official sources
-- **Term Lookup** — Search and define any term without marking it as used
+<p align="center">
+  <img src="assets/brevity_cover.png" alt="ALSSA Multi-Service Brevity Codes (April 2025) cover" width="320">
+</p>
 
-### 🎯 Interactive Quizzes
-- **Multiple Choice Quizzes** — Test your knowledge with randomly generated questions
-- **Two Modes:**
-  - **Public Mode** — Compete with friends in a timed channel poll
-  - **Private Mode** — Take quizzes solo with ephemeral responses
-- **Greenie Board** — Track your last 10 quiz scores with a naval aviation-style performance board
+## What it does
 
-### ⚙️ Server Configuration
-- **Flexible Scheduling** — Set post frequency to any interval (default: 24 hours)
-- **Per-Server Settings** — Each Discord server maintains independent configuration
-- **Enable/Disable Posting** — Pause and resume automatic posts anytime
-- **Channel Assignment** — Choose which channel receives the daily posts
+BrevityBot drops a brevity term into your channel on whatever schedule you set, cycling through the full list without repeats. You can also pull up any definition instantly with `/define`, and test yourself (or compete with the server) using the built-in quizzes.
 
-## 🚀 Quick Start
+<p align="center">
+  <img src="assets/discord_embed.png" alt="Example BrevityBot term post in Discord" width="480">
+</p>
 
-**Don't want to self-host?** Invite the public bot to your server:
+## Features
 
-👉 **[Add BrevityBot to Discord](https://discord.com/oauth2/authorize?client_id=1359029668547924098)**
+- **Scheduled posts** — A new term is posted automatically at an interval you choose (default: every 24 hours), rotating through all terms before repeating.
+- **On-demand lookup** — `/define` searches and explains any term, with autocomplete, without consuming it from the rotation.
+- **Manual posting** — Grab the next term whenever you want with `/nextterm`.
+- **Quizzes** — Multiple-choice questions generated from the term definitions, in a public timed poll or a private solo run.
+- **Greenie board** — Tracks each user's last 10 quiz scores, naval-aviation style.
+- **Per-server config** — Every server has its own channel, schedule, rotation state, and scores.
 
-Then run `/setup` in your desired channel to get started!
+## Quick start
 
-## 📋 Commands
+Invite the bot to your server:
+
+**[➕ Add BrevityBot to Discord](https://discord.com/oauth2/authorize?client_id=1359029668547924098)**
+
+Then run `/setup` in the channel where you want terms posted.
+
+## Commands
 
 | Command | Description |
 |---------|-------------|
 | `/setup` | Configure the current channel for automatic posting |
 | `/nextterm` | Manually post the next brevity term |
 | `/define <term>` | Look up a term's definition (with autocomplete) |
-| `/quiz [questions] [mode] [duration]` | Start a quiz (1-10 questions, public or private) |
-| `/greenieboard` | View quiz leaderboard with last 10 results per user |
-| `/setfrequency <hours>` | Set posting interval (any positive number) |
+| `/quiz [questions] [mode] [duration]` | Start a quiz (1–10 questions, public or private) |
+| `/greenieboard` | View the quiz leaderboard (last 10 results per user) |
+| `/setfrequency <hours>` | Set the posting interval |
 | `/enableposting` | Resume automatic posting |
 | `/disableposting` | Pause automatic posting |
-| `/reloadterms` | Manually refresh terms from Wikipedia |
-| `/checkperms` | Verify bot permissions in the current channel |
+| `/reloadterms` | Refresh the term list |
+| `/checkperms` | Verify the bot's permissions in the current channel |
 
-## 🛠️ How It Works
+## How it works
 
-1. **Term Fetching** — Scrapes [Wikipedia's Multiservice Tactical Brevity Code](https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code) page and parses 500+ terms with definitions
-2. **Caching** — Terms are cached in Redis to minimize API calls and improve performance
-3. **Per-Guild Tracking** — Each Discord server maintains:
-   - Used/unused term history
-   - Posting schedule and frequency
-   - Channel configuration
-   - Individual user quiz scores
-4. **Scheduled Tasks** — Background tasks handle:
-   - Automatic term posting based on server schedules
-   - Daily term refresh from Wikipedia
-   - Health monitoring and stats logging
-5. **Quiz Generation** — Creates multiple-choice questions by masking the term from its definition and adding distractor answers
+Terms and definitions are sourced from [Wikipedia's Multi-service tactical brevity code](https://en.wikipedia.org/wiki/Multi-service_tactical_brevity_code) page (which mirrors the ALSSA publication) and cached in Redis. Each server tracks its own rotation, schedule, and quiz scores independently. Background tasks handle scheduled posting, periodic term refreshes, and health logging. Quizzes are built by masking the term out of its own definition and adding distractor answers.
 
-## 🤝 Contributing
+## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome — feel free to open a pull request.
 
+## Support
 
-## 🆘 Support
+Common issues:
 
-Having issues? Check the logs for detailed error messages. Common issues:
+- **Bot not responding** — Confirm the bot has the right permissions (`/checkperms`).
+- **Terms not posting** — Make sure posting is enabled (`/enableposting`).
 
-- **Bot not responding** — Verify the bot has proper permissions in your server
-- **Terms not posting** — Check that posting is enabled with `/enableposting`
-
-For bugs or feature requests, please [open an issue](https://github.com/joemurrell/brevitybot/issues).
+For bugs or feature requests, [open an issue](https://github.com/joemurrell/brevitybot/issues).
