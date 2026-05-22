@@ -606,16 +606,25 @@ class TestModuleSurface:
             assert child.answer_idx == i
 
     def test_command_admin_gates(self):
-        """Per chunk (c): config commands must be admin-gated and guild-only."""
-        gated_admin = ["setup", "reloadterms", "setfrequency", "disableposting", "enableposting"]
+        """Per chunks (c) and (m): config and admin-recovery commands must be
+        admin-gated and guild-only. /quizstop uses manage_messages, /quizpurge
+        uses manage_guild (more restrictive — purge is a recovery hammer)."""
+        gated_manage_guild = ["setup", "reloadterms", "setfrequency", "disableposting", "enableposting", "quizpurge"]
+        gated_manage_messages = ["quizstop"]
         guild_only_no_admin = ["nextterm", "quiz", "greenieboard", "checkperms"]
         no_gate = ["define"]
-        for name in gated_admin:
+        for name in gated_manage_guild:
             cmd = brevitybot.tree.get_command(name)
             assert cmd is not None, f"missing /{name}"
             assert cmd.guild_only is True, f"/{name} should be guild_only"
             perms = cmd.default_permissions
             assert perms is not None and perms.manage_guild, f"/{name} missing manage_guild"
+        for name in gated_manage_messages:
+            cmd = brevitybot.tree.get_command(name)
+            assert cmd is not None, f"missing /{name}"
+            assert cmd.guild_only is True
+            perms = cmd.default_permissions
+            assert perms is not None and perms.manage_messages, f"/{name} missing manage_messages"
         for name in guild_only_no_admin:
             cmd = brevitybot.tree.get_command(name)
             assert cmd is not None
@@ -625,6 +634,11 @@ class TestModuleSurface:
             cmd = brevitybot.tree.get_command(name)
             assert cmd is not None
             assert cmd.guild_only is False
+
+    def test_quizstop_quizpurge_registered(self):
+        """Surface-only: /quizstop and /quizpurge exist on the tree."""
+        for name in ("quizstop", "quizpurge"):
+            assert brevitybot.tree.get_command(name) is not None, f"missing /{name}"
 
 
 # -------------------------------
