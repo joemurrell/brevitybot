@@ -64,5 +64,6 @@ Common issues:
 
 - **Bot not responding** — Confirm the bot has the right permissions (`/checkperms`).
 - **Terms not posting** — Make sure posting is enabled (`/enableposting`).
+- **A public quiz needs to be cancelled** — A mod can run `/quizstop` (Manage Messages) to end it immediately and skip the summary. If a new quiz refuses to start because of a stuck lock, an admin can run `/quizpurge` (Manage Server) to clear it.
 
 For bugs or feature requests, [open an issue](https://github.com/joemurrell/brevitybot/issues).
