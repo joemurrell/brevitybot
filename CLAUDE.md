@@ -47,7 +47,7 @@ The entire bot is a single file: `brevitybot.py`. There are no modules, packages
 
 **Background tasks** — Three `@tasks.loop()` tasks started in `setup_hook()`:
 - `post_brevity_term` — runs every 5 minutes; reads channel map + disabled set + freq/last-posted in batched calls (`HGETALL` + `SMEMBERS` + 2× `MGET` = 4 calls regardless of guild count), then iterates the batched data to decide who's due.
-- `refresh_terms_daily` — runs every 24 hours, re-scrapes Wikipedia via `parse_brevity_terms()`.
+- `refresh_terms_daily` — runs every 24 hours, calls `update_brevity_terms()` (which wraps `parse_brevity_terms()` + atomic backup/replace + cache invalidation).
 - `log_bot_stats` — runs every hour, logs server count.
 
 **Term scraping** — `parse_brevity_terms()` fetches the Wikipedia multi-service tactical brevity code page; the actual parsing is in `_parse_terms_from_content(content)`, a pure helper (no I/O) that's fully unit-testable. It walks only top-level `<dl>` blocks, iterating their direct `<dt>/<dd>` children; nested `<ul>/<ol>/<dl>` are extracted from `<dd>`s before `get_text()` so bullets aren't duplicated, and stray lists outside any `<dl>` can't be glued onto the previous term. `update_brevity_terms()` diffs against stored terms, atomically backups + writes via a `MULTI/EXEC` pipeline, then invalidates the cache.
@@ -55,7 +55,7 @@ The entire bot is a single file: `brevitybot.py`. There are no modules, packages
 **Quiz system** — Both modes share `build_quiz_question(current, all_terms, *, title, footer, with_timestamp=False)`, which returns `(embed, options, correct_idx, question_type)`. Each mode supplies its own embed styling.
 
 - *Private*: ephemeral, single-user. `ask_question(q_idx, parent_interaction=None)` threads each button-click's interaction forward so subsequent questions use a fresh 15-minute token (not the original slash-command interaction). Per-question view timeout = 300 s.
-- *Public*: persistent. Buttons are `QuizButton(discord.ui.DynamicItem)` instances; Discord routes clicks by custom_id pattern `q:{quiz_id}:{q_idx}:{answer_idx}`, so they keep working after a bot restart. Full quiz state is persisted to `quiz:{quiz_id}:meta` (JSON). `close_and_summarize(quiz_id)` is a top-level async function that reads everything from Redis — `setup_hook` scans for active quizzes and reschedules summaries after a restart. Per-guild concurrency lock (`active_quiz:{guild_id}`, atomic `SET NX EX`) prevents two simultaneous public quizzes; per-user 60 s cooldown prevents rapid spam. `/quizstop` (Manage Messages) cancels in-flight; `/quizpurge` (Manage Server) clears a stale lock but refuses if meta still exists.
+- *Public*: persistent. Buttons are `QuizButton(discord.ui.DynamicItem)` instances; Discord routes clicks by custom_id pattern `q:{quiz_id}:{q_idx}:{answer_idx}`, so they keep working after a bot restart. Full quiz state is persisted to `quiz:{quiz_id}:meta` (JSON). `close_and_summarize(quiz_id)` is a top-level async function that reads everything from Redis — `setup_hook` scans for active quizzes and reschedules summaries after a restart. Per-guild concurrency lock (`active_quiz:{guild_id}`, atomic `SET NX EX`) prevents two simultaneous public quizzes. Per-user 60 s cooldown is **checked** for every `/quiz` invocation but only **set** after a successful public-quiz start (private mode self-throttles via sequential interaction), so a user who starts a public quiz can't immediately start another in either mode. `/quizstop` (Manage Messages) cancels in-flight; `/quizpurge` (Manage Server) clears a stale lock but refuses if meta still exists.
 
 ### Redis key schema
 
@@ -91,7 +91,7 @@ Every data access function takes a `guild_id` parameter (typed `int`). The `post
 ## Key conventions
 
 - All I/O is async/await — never use blocking calls (`requests`, `time.sleep`) inside coroutines except at startup before `client.run()`.
-- Always `defer` interactions before any `await` that could take more than ~2 seconds. Defer is the *first* thing a slash command does, before validation or Redis reads, so the 3-second response deadline can never fire:
+- `defer` early in any command that does non-trivial work — a Wikipedia scrape, a quiz build, anything that might exceed Discord's 3-second response deadline. Defer is the first `await`, before validation or Redis reads, so the deadline can never fire mid-work. Currently the commands that defer are `/nextterm`, `/reloadterms`, `/quiz`, `/quizstop`, `/quizpurge`; the rest (`/setup`, `/define`, `/setfrequency`, `/enableposting`, `/disableposting`, `/greenieboard`, `/checkperms`) finish in a single Redis hit or less and respond directly. Add `defer` to any new command that's not in that fast group:
   ```python
   await interaction.response.defer(ephemeral=True, thinking=True)
   # ... validate, read Redis, do work ...
