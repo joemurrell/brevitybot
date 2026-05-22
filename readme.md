@@ -41,8 +41,8 @@ Then run `/setup` in the channel where you want terms posted.
 | `/nextterm` | Manually post the next brevity term |
 | `/define <term>` | Look up a term's definition (with autocomplete) |
 | `/quiz [questions] [mode] [duration]` | Start a quiz (1–10 questions, public or private) |
-| `/quizstop` | Cancel the current public quiz (Manage Messages) |
-| `/quizpurge` | Force-clear a stuck active-quiz lock (Manage Server) |
+| `/quizstop` | Cancel the current public quiz |
+| `/quizpurge` | Force-clear a stuck active-quiz lock  |
 | `/greenieboard` | View the quiz leaderboard (last 10 results per user) |
 | `/setfrequency <hours>` | Set the posting interval |
 | `/enableposting` | Resume automatic posting |
