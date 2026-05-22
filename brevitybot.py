@@ -1499,6 +1499,121 @@ async def quiz(
     except Exception:
         logger.exception("Failed to set user cooldown for user=%s", interaction.user.id)
     asyncio.create_task(close_and_summarize(quiz_id))
+
+
+@tree.command(name="quizstop", description="Cancel the current public quiz in this server.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+async def quizstop(interaction: discord.Interaction):
+    """Cancel an in-flight public quiz: disable the buttons on each question
+    message, drop all per-quiz Redis state, and post a channel message
+    announcing the cancellation. The pre-scheduled close_and_summarize task
+    will find missing meta on wake-up and skip silently — no orphaned summary.
+    """
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except discord.NotFound:
+        return
+
+    guild_id = interaction.guild.id
+    active_key = f"{ACTIVE_QUIZ_KEY_PREFIX}{guild_id}"
+    quiz_id = await r.get(active_key)
+    if not quiz_id:
+        await interaction.followup.send("No active public quiz in this server.", ephemeral=True)
+        return
+
+    meta_raw = await r.get(f"quiz:{quiz_id}:meta")
+    if not meta_raw:
+        # Lock present but meta is gone (already cleaned up by deadline). Just
+        # drop the lock so a new quiz can start.
+        await r.delete(active_key)
+        await interaction.followup.send(
+            "Cleared a stale active-quiz lock (the quiz had already finished or expired).",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        meta: QuizMeta = json.loads(meta_raw)
+    except Exception:
+        logger.exception("quizstop: bad meta JSON for quiz_id=%s", quiz_id)
+        await interaction.followup.send("Couldn't parse quiz state. See logs.", ephemeral=True)
+        return
+
+    n = len(meta["correct_indices"])
+    await _cleanup_quiz_keys(quiz_id, n, guild_id=guild_id)
+
+    # Strip the buttons off each question message so further clicks can't be
+    # confused with a live quiz. Best-effort — a fetch failure shouldn't block
+    # the cancel.
+    channel = interaction.channel
+    disabled = 0
+    for msg_id in meta.get("message_ids", []):
+        try:
+            msg = await channel.fetch_message(msg_id)
+            await msg.edit(view=None)
+            disabled += 1
+        except Exception:
+            logger.debug("quizstop: couldn't strip view from msg %s", msg_id)
+
+    logger.info(
+        "Quiz cancelled",
+        extra={"quiz_id": quiz_id, "guild_id": guild_id, "by_user_id": interaction.user.id, "disabled_views": disabled},
+    )
+
+    try:
+        await channel.send(f"**Quiz cancelled** by {interaction.user.mention}. No summary will be posted.")
+    except Exception:
+        logger.exception("Failed to post cancellation message")
+
+    await interaction.followup.send(
+        f"Cancelled the active quiz ({n} question{'s' if n != 1 else ''}; "
+        f"disabled buttons on {disabled} message{'s' if disabled != 1 else ''}).",
+        ephemeral=True,
+    )
+
+
+@tree.command(name="quizpurge", description="Force-clear a stuck active-quiz lock (admin recovery).")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+async def quizpurge(interaction: discord.Interaction):
+    """Recovery command for the rare case where the active-quiz lock is held
+    but no quiz meta exists (e.g. a crash between SET NX and meta-persist, or
+    a manual Redis state deletion). Refuses to run if meta still exists — use
+    /quizstop for healthy quizzes.
+    """
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except discord.NotFound:
+        return
+
+    guild_id = interaction.guild.id
+    active_key = f"{ACTIVE_QUIZ_KEY_PREFIX}{guild_id}"
+    quiz_id = await r.get(active_key)
+    if not quiz_id:
+        await interaction.followup.send("No active-quiz lock to clear.", ephemeral=True)
+        return
+
+    meta_exists = await r.exists(f"quiz:{quiz_id}:meta")
+    if meta_exists:
+        await interaction.followup.send(
+            f"There's a healthy active quiz (id `{quiz_id}`). Use **/quizstop** to cancel it "
+            "instead of /quizpurge.",
+            ephemeral=True,
+        )
+        return
+
+    await r.delete(active_key)
+    logger.info(
+        "Stale active-quiz lock cleared",
+        extra={"quiz_id": quiz_id, "guild_id": guild_id, "by_user_id": interaction.user.id},
+    )
+    await interaction.followup.send(
+        f"Cleared stale active-quiz lock (was: `{quiz_id}`). New quizzes can now start.",
+        ephemeral=True,
+    )
+
+
 # Greenie Board command
 @tree.command(name="greenieboard", description="Show the Greenie Board for this server (last 10 quizzes per user)")
 @app_commands.guild_only()
