@@ -3,7 +3,7 @@ aiohttp==3.13.5
 aiosignal
 attrs==26.1.0
 beautifulsoup4==4.14.3
-certifi==2026.2.25
+certifi==2026.5.20
 charset-normalizer==3.4.7
 discord.py==2.7.1
 frozenlist==1.8.0
