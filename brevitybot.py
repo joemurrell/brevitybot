@@ -497,7 +497,7 @@ def build_quiz_question(
                 "is_correct": False,
             })
         options.append({"term": correct_term, "definition": correct_def, "is_correct": True})
-        prompt = f"Which brevity term matches this definition:\n\n**{correct_def}**"
+        prompt = f"Which brevity term matches this definition:\n**{correct_def}**"
 
     random.shuffle(options)
     correct_idx = next(i for i, o in enumerate(options) if o["is_correct"])
