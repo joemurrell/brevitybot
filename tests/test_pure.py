@@ -8,6 +8,7 @@ import asyncio
 import random
 from unittest.mock import MagicMock
 
+import discord
 import pytest
 
 import brevitybot
@@ -949,3 +950,109 @@ class TestBuildGreeniesBoard:
             assert "CachedUser" in result
         finally:
             brevitybot.client.get_user = original_get_user
+
+
+class TestResolvePostChannel:
+    """Regression tests for the scheduled-post channel resolution.
+
+    Background: the three tasks.loop tasks are started from setup_hook, which
+    runs after login but BEFORE the gateway connects. At that moment
+    client.get_channel() misses for every configured channel because the cache
+    is still empty. The old code treated that miss as "stale config" and did
+    HDEL post_channels <guild_id>, permanently destroying a valid /setup and
+    silently stopping scheduled posts for that guild.
+
+    A cache miss must therefore never delete config on its own — only a
+    definitive 404 from the API may.
+    """
+
+    @staticmethod
+    def _response(status):
+        return type("R", (), {"status": status, "reason": "err"})()
+
+    class _Redis:
+        def __init__(self):
+            self.hdel_calls = []
+
+        async def hdel(self, key, field):
+            self.hdel_calls.append((key, field))
+
+    def _run(self, *, cached, fetch_exc=None):
+        """Resolve a channel with the given cache/API behavior.
+
+        Returns (result_channel, hdel_calls).
+        """
+        fake_redis = self._Redis()
+        sentinel = object()
+
+        original_r = brevitybot.r
+        original_get = brevitybot.client.get_channel
+        original_fetch = getattr(brevitybot.client, "fetch_channel", None)
+        try:
+            brevitybot.r = fake_redis
+            brevitybot.client.get_channel = lambda cid: sentinel if cached else None
+
+            async def fake_fetch(cid):
+                if fetch_exc is not None:
+                    raise fetch_exc
+                return sentinel
+
+            brevitybot.client.fetch_channel = fake_fetch
+
+            result = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+                brevitybot._resolve_post_channel(111, 222)
+            )
+            return result, fake_redis.hdel_calls, sentinel
+        finally:
+            brevitybot.r = original_r
+            brevitybot.client.get_channel = original_get
+            if original_fetch is not None:
+                brevitybot.client.fetch_channel = original_fetch
+
+    def test_cache_hit_returns_channel_without_api_call(self):
+        result, hdel_calls, sentinel = self._run(cached=True)
+        assert result is sentinel
+        assert hdel_calls == []
+
+    def test_cache_miss_does_not_delete_config_when_channel_alive(self):
+        """The startup race: cache empty, but the channel really exists.
+
+        This is the exact condition that wiped users' /setup configs.
+        """
+        result, hdel_calls, sentinel = self._run(cached=False)
+        assert result is sentinel, "should fall back to an API fetch"
+        assert hdel_calls == [], "a cache miss must never delete config"
+
+    def test_genuinely_deleted_channel_is_cleaned_up(self):
+        exc = discord.NotFound(self._response(404), "gone")
+        result, hdel_calls, _ = self._run(cached=False, fetch_exc=exc)
+        assert result is None
+        assert hdel_calls == [(brevitybot.CHANNEL_MAP_KEY, "111")]
+
+    def test_forbidden_keeps_config(self):
+        """Permissions can be restored by an admin — don't discard config."""
+        exc = discord.Forbidden(self._response(403), "denied")
+        result, hdel_calls, _ = self._run(cached=False, fetch_exc=exc)
+        assert result is None
+        assert hdel_calls == []
+
+    def test_transient_http_error_keeps_config(self):
+        exc = discord.HTTPException(self._response(500), "boom")
+        result, hdel_calls, _ = self._run(cached=False, fetch_exc=exc)
+        assert result is None
+        assert hdel_calls == []
+
+
+class TestLoopReadinessGuards:
+    """The posting/stats loops must wait for the Discord cache before ticking.
+
+    Started from setup_hook (pre-gateway), an unguarded first tick sees an
+    empty guild cache — which is why startup logged "Servers: 0" and why the
+    posting loop found no channels.
+    """
+
+    def test_post_brevity_term_waits_for_ready(self):
+        assert brevitybot.post_brevity_term._before_loop is not None
+
+    def test_log_bot_stats_waits_for_ready(self):
+        assert brevitybot.log_bot_stats._before_loop is not None
