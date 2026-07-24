@@ -1777,20 +1777,30 @@ async def checkperms(interaction: discord.Interaction):
 # -------------------------------
 @tasks.loop(minutes=5)
 async def post_brevity_term():
-    all_configs = await load_config()
-    if not all_configs:
-        return
+    # The whole body is guarded by this try/except: tasks.loop silently and
+    # permanently stops a loop if an unhandled exception escapes it, and
+    # since this loop is only ever started once (in setup_hook), a single
+    # transient Redis error here would kill scheduled posting for good while
+    # the rest of the bot kept working. Catching everything means a bad tick
+    # just gets skipped and retried in 5 minutes.
+    try:
+        all_configs = await load_config()
+        if not all_configs:
+            return
 
-    # Batch all per-guild reads up-front so the per-tick Redis cost is
-    # constant in the number of guilds, not 3N (was: SISMEMBER + 2 GETs per
-    # guild). Three calls total: HGETALL channel map + SMEMBERS disabled set
-    # + 2 MGETs (freq/last_posted).
-    guild_id_strs = list(all_configs.keys())
-    disabled_guilds = await r.smembers(DISABLED_GUILDS_KEY)
-    freq_keys = [f"{FREQ_KEY_PREFIX}{gid}" for gid in guild_id_strs]
-    last_keys = [f"{LAST_POSTED_KEY_PREFIX}{gid}" for gid in guild_id_strs]
-    freq_values = await r.mget(freq_keys) if freq_keys else []
-    last_values = await r.mget(last_keys) if last_keys else []
+        # Batch all per-guild reads up-front so the per-tick Redis cost is
+        # constant in the number of guilds, not 3N (was: SISMEMBER + 2 GETs per
+        # guild). Three calls total: HGETALL channel map + SMEMBERS disabled set
+        # + 2 MGETs (freq/last_posted).
+        guild_id_strs = list(all_configs.keys())
+        disabled_guilds = await r.smembers(DISABLED_GUILDS_KEY)
+        freq_keys = [f"{FREQ_KEY_PREFIX}{gid}" for gid in guild_id_strs]
+        last_keys = [f"{LAST_POSTED_KEY_PREFIX}{gid}" for gid in guild_id_strs]
+        freq_values = await r.mget(freq_keys) if freq_keys else []
+        last_values = await r.mget(last_keys) if last_keys else []
+    except Exception as e:
+        logger.error("post_brevity_term: failed to load per-tick config, skipping this tick: %s", e)
+        return
 
     current_time = time.time()
     for i, guild_id_str in enumerate(guild_id_strs):
@@ -1847,11 +1857,29 @@ async def post_brevity_term():
 
 @tasks.loop(hours=24)
 async def refresh_terms_daily():
-    await update_brevity_terms()
+    # Same rationale as post_brevity_term: an unhandled exception here would
+    # permanently stop this loop (tasks.loop doesn't auto-restart), so a
+    # transient Redis/network failure must not escape the body.
+    try:
+        await update_brevity_terms()
+    except Exception as e:
+        logger.error("refresh_terms_daily: failed to refresh terms, will retry next cycle: %s", e)
 
 @tasks.loop(hours=1)
 async def log_bot_stats():
     logger.info("BrevityBot Statistics: Servers: %d", len(client.guilds))
+
+    # Self-healing backstop: tasks.loop permanently stops a loop on an
+    # unhandled exception and nothing else restarts it. The loops above now
+    # guard their own bodies, but if one still dies unexpectedly, restart it
+    # here rather than silently losing scheduled posting/term refresh until
+    # the next deploy.
+    if not post_brevity_term.is_running():
+        logger.warning("post_brevity_term loop was not running; restarting it.")
+        post_brevity_term.start()
+    if not refresh_terms_daily.is_running():
+        logger.warning("refresh_terms_daily loop was not running; restarting it.")
+        refresh_terms_daily.start()
 
 # -------------------------------
 # BOT READY EVENT
