@@ -1775,6 +1775,47 @@ async def checkperms(interaction: discord.Interaction):
 # -------------------------------
 # BACKGROUND TASKS
 # -------------------------------
+async def _resolve_post_channel(guild_id: int, channel_id: int):
+    """Resolve a guild's configured post channel.
+
+    client.get_channel() only consults the in-memory cache. A miss means
+    "not cached right now" — which is NOT the same as "deleted". Treating a
+    miss as stale is what previously wiped valid /setup configs out of
+    Redis, so a miss falls back to an authoritative API fetch and only a
+    definitive 404 counts as stale. Anything else (missing permissions, a
+    transient HTTP error) leaves the config alone to retry next tick.
+
+    Returns the channel, or None if this guild should be skipped this tick.
+    """
+    channel = client.get_channel(channel_id)
+    if channel is not None:
+        return channel
+
+    try:
+        return await client.fetch_channel(channel_id)
+    except discord.NotFound:
+        # The channel really is gone; this is the only case worth cleaning up.
+        logger.warning(
+            "Channel %s for guild %s no longer exists. Removing stale config.",
+            channel_id, guild_id,
+        )
+        await r.hdel(CHANNEL_MAP_KEY, str(guild_id))
+        return None
+    except discord.Forbidden:
+        # Permissions can be restored by an admin — never discard config here.
+        logger.warning(
+            "No access to channel %s for guild %s; keeping config, will retry next tick.",
+            channel_id, guild_id,
+        )
+        return None
+    except discord.HTTPException as e:
+        logger.warning(
+            "Transient error resolving channel %s for guild %s: %s; will retry next tick.",
+            channel_id, guild_id, e,
+        )
+        return None
+
+
 @tasks.loop(minutes=5)
 async def post_brevity_term():
     # The whole body is guarded by this try/except: tasks.loop silently and
@@ -1825,10 +1866,8 @@ async def post_brevity_term():
             if current_time < next_post_time - 300:
                 continue
 
-            channel = client.get_channel(config["channel_id"])
-            if not channel:
-                logger.warning("Channel %s not found for guild %s. Removing stale config.", config['channel_id'], guild_id)
-                await r.hdel(CHANNEL_MAP_KEY, str(guild_id))
+            channel = await _resolve_post_channel(guild_id, config["channel_id"])
+            if channel is None:
                 continue
 
             term = await get_next_brevity_term(guild_id)
@@ -1853,6 +1892,19 @@ async def post_brevity_term():
 
         except Exception as e:
             logger.error("Failed to post to guild %s: %s", guild_id_str, e)
+
+
+@post_brevity_term.before_loop
+async def _before_post_brevity_term():
+    """Block the first tick until the guild/channel cache is populated.
+
+    These loops are started from setup_hook, which runs after login but
+    BEFORE the gateway connects — so on startup client.get_channel() would
+    miss for every configured channel and the tick would do nothing useful
+    (and, before _resolve_post_channel existed, would delete the config).
+    wait_until_ready() holds the loop until READY/GUILD_CREATE have landed.
+    """
+    await client.wait_until_ready()
 
 
 @tasks.loop(hours=24)
@@ -1880,6 +1932,13 @@ async def log_bot_stats():
     if not refresh_terms_daily.is_running():
         logger.warning("refresh_terms_daily loop was not running; restarting it.")
         refresh_terms_daily.start()
+
+
+@log_bot_stats.before_loop
+async def _before_log_bot_stats():
+    """Wait for the cache so the very first stats line isn't 'Servers: 0'
+    (same setup_hook-before-gateway ordering as post_brevity_term)."""
+    await client.wait_until_ready()
 
 # -------------------------------
 # BOT READY EVENT
