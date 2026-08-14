@@ -579,7 +579,8 @@ def _parse_terms_from_content(content: bytes | str) -> list[Term]:
     soup = BeautifulSoup(content, "html.parser")
     content_div = soup.find("div", class_="mw-parser-output")
     if not content_div:
-        snippet = (content.decode('utf-8', errors='replace')[:1000] + "...") if content else ""
+        raw = content if isinstance(content, bytes) else content.encode('utf-8')
+        snippet = (raw.decode('utf-8', errors='replace')[:1000] + "...") if raw else ""
         logger.error("Couldn't find Wikipedia content container. Page snippet:\n%s", snippet)
         return terms
 
