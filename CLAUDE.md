@@ -92,6 +92,16 @@ Every data access function takes a `guild_id` parameter (typed `int`). The `post
 
 `get_next_brevity_term(guild_id)` is race-aware: it uses `SADD`'s return value to detect when another caller (e.g. concurrent `/nextterm` + scheduled post, or a multi-instance deploy) claimed the same term, and retries up to 5 × with a refreshed used-set.
 
+### Production log alerting (`alert_relay.py`)
+
+A separate, standalone service (not imported by `brevitybot.py`) that turns WARNING+ log lines from the bot's Railway logs into Discord messages. It exists because the log-shipping tool (Locomotive, `ghcr.io/brody192/locomotive`) has no Discord-compatible output mode — it only emits raw JSON/JSONL, which Discord's webhook API rejects outright. `alert_relay.py` is the translator in between: Locomotive → `POST /webhook` on this service → reformatted `{embeds: [...]}` → Discord webhook.
+
+**Deployment topology** (3 Railway services cooperating): `discord bot` → Locomotive (subscribes to the bot's Railway log stream) → `alert_relay.py` (`/webhook`) → Discord webhook.
+
+**Severity filtering requires `LOG_FORMAT=json` on the bot.** Railway attaches a `level` attribute to every log line, but only extracts a real value from apps emitting structured logs — plain-text logs (the bot's default) all report as Railway's own generic "info" severity regardless of actual Python log level. `alert_relay.extract_level()` reads the app-reported `level` field (present because `JSONFormatter` emits `{"level": "WARNING", ...}` per line) — it deliberately does **not** fall back to Railway's own `severity` field, which is not trustworthy for this app. Without `LOG_FORMAT=json` on the bot, every log line looks like "info" to the relay and nothing will ever alert — this bit the team once already (see the `post_brevity_term` startup-race postmortem; Locomotive was independently dead throughout that entire incident, so no alert would have fired even if this filter had been in place).
+
+Config: `DISCORD_WEBHOOK_URL` (the outbound target), `RELAY_SHARED_SECRET` (checked against the `X-Relay-Secret` header on inbound requests from Locomotive — set the same value in Locomotive's `LOCOMOTIVE_ADDITIONAL_HEADERS`), `PORT`. Alertable levels: `WARNING`/`WARN`, `ERROR`/`ERR`, `CRITICAL`/`FATAL`. A batch of more than 10 alertable lines (Discord's embed-per-message cap) is chunked into multiple messages plus one summary line.
+
 ## Key conventions
 
 - All I/O is async/await — never use blocking calls (`requests`, `time.sleep`) inside coroutines except at startup before `client.run()`.
