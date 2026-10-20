@@ -7,6 +7,7 @@ import json
 
 from alert_relay import (
     ALERT_LEVELS,
+    MAX_CHARS_PER_PAYLOAD,
     MAX_EMBEDS_PER_ALERT,
     build_discord_embed,
     build_discord_payloads,
@@ -147,3 +148,13 @@ class TestBuildDiscordPayloads:
         payloads = build_discord_payloads(logs)
         assert len(payloads) == 1
         assert len(payloads[0]["embeds"]) == MAX_EMBEDS_PER_ALERT
+
+    def test_payloads_stay_under_discord_char_limit(self):
+        # 10 long messages would be ~15000 chars in one payload without size-aware chunking
+        logs = [{"level": "error", "message": "x" * 5000} for _ in range(10)]
+        payloads = build_discord_payloads(logs)
+        for p in payloads:
+            if "embeds" in p:
+                total = sum(len(e["title"]) + len(e["description"]) for e in p["embeds"])
+                assert total <= MAX_CHARS_PER_PAYLOAD
+        assert sum(len(p.get("embeds", [])) for p in payloads) == 10

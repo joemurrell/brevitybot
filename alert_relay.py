@@ -15,13 +15,15 @@ Run standalone: python alert_relay.py
 """
 from __future__ import annotations
 
+import asyncio
+import hmac
 import json
 import logging
 import os
 import sys
 from typing import Any, Optional
 
-from aiohttp import web, ClientSession, ClientTimeout
+from aiohttp import web, ClientError, ClientSession, ClientTimeout
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -45,6 +47,8 @@ LEVEL_COLORS = {
 }
 MAX_MESSAGE_CHARS = 1500
 MAX_EMBEDS_PER_ALERT = 10  # Discord's hard cap on embeds in one webhook message
+# Discord also caps the combined text of all embeds in one message at 6000 chars.
+MAX_CHARS_PER_PAYLOAD = 5500  # headroom under 6000 for titles/field names
 
 
 def parse_log_payload(raw_body: bytes) -> list[dict[str, Any]]:
@@ -130,6 +134,14 @@ def build_discord_embed(log: dict[str, Any]) -> dict[str, Any]:
     return embed
 
 
+def _embed_chars(embed: dict[str, Any]) -> int:
+    """Characters Discord counts toward the 6000-per-message embed limit."""
+    total = len(embed.get("title", "")) + len(embed.get("description", ""))
+    for field in embed.get("fields", []):
+        total += len(field["name"]) + len(field["value"])
+    return total
+
+
 def build_discord_payloads(logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Group alertable logs into one or more Discord webhook payloads.
 
@@ -141,12 +153,23 @@ def build_discord_payloads(logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not alertable:
         return []
 
-    payloads = []
-    for i in range(0, len(alertable), MAX_EMBEDS_PER_ALERT):
-        chunk = alertable[i : i + MAX_EMBEDS_PER_ALERT]
-        payloads.append({"embeds": [build_discord_embed(log) for log in chunk]})
+    payloads: list[dict[str, Any]] = []
+    chunk: list[dict[str, Any]] = []
+    chunk_chars = 0
+    for log in alertable:
+        embed = build_discord_embed(log)
+        size = _embed_chars(embed)
+        if chunk and (
+            len(chunk) >= MAX_EMBEDS_PER_ALERT or chunk_chars + size > MAX_CHARS_PER_PAYLOAD
+        ):
+            payloads.append({"embeds": chunk})
+            chunk, chunk_chars = [], 0
+        chunk.append(embed)
+        chunk_chars += size
+    if chunk:
+        payloads.append({"embeds": chunk})
 
-    if len(alertable) > MAX_EMBEDS_PER_ALERT:
+    if len(payloads) > 1:
         payloads.append(
             {"content": f"⚠️ {len(alertable)} warning/error log lines received in this batch."}
         )
@@ -155,19 +178,39 @@ def build_discord_payloads(logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 async def send_to_discord(session: ClientSession, payload: dict[str, Any]) -> None:
+    """Post one payload; retries once on a 429. Never raises.
+
+    Failures are logged, not propagated: a 500 back to Locomotive would make
+    it retry the whole batch and re-post chunks that already went through.
+    """
     if not DISCORD_WEBHOOK_URL:
         logger.error("DISCORD_WEBHOOK_URL is not set; dropping alert: %s", payload)
         return
-    async with session.post(DISCORD_WEBHOOK_URL, json=payload) as resp:
-        if resp.status >= 300:
-            body = await resp.text()
-            logger.error("Discord webhook returned %s: %.500s", resp.status, body)
+    for attempt in range(2):
+        try:
+            async with session.post(DISCORD_WEBHOOK_URL, json=payload) as resp:
+                if resp.status == 429 and attempt == 0:
+                    try:
+                        delay = float(resp.headers.get("Retry-After", "1"))
+                    except ValueError:
+                        delay = 1.0
+                    await asyncio.sleep(min(delay, 10))
+                    continue
+                if resp.status >= 300:
+                    body = await resp.text()
+                    logger.error("Discord webhook returned %s: %.500s", resp.status, body)
+                return
+        except (ClientError, asyncio.TimeoutError) as exc:
+            logger.error("Discord webhook request failed: %s", exc)
+            return
 
 
 async def handle_webhook(request: web.Request) -> web.Response:
-    if RELAY_SHARED_SECRET:
-        if request.headers.get("X-Relay-Secret") != RELAY_SHARED_SECRET:
-            return web.Response(status=401, text="unauthorized")
+    provided = request.headers.get("X-Relay-Secret", "")
+    if not RELAY_SHARED_SECRET or not hmac.compare_digest(
+        provided.encode(), RELAY_SHARED_SECRET.encode()
+    ):
+        return web.Response(status=401, text="unauthorized")
 
     raw_body = await request.read()
     logs = parse_log_payload(raw_body)
@@ -207,5 +250,5 @@ if __name__ == "__main__":
     if not DISCORD_WEBHOOK_URL:
         logger.warning("DISCORD_WEBHOOK_URL is not set at startup; alerts will be dropped until it is.")
     if not RELAY_SHARED_SECRET:
-        logger.warning("RELAY_SHARED_SECRET is not set; /webhook is unauthenticated.")
+        sys.exit("RELAY_SHARED_SECRET is required; refusing to start with an open /webhook.")
     web.run_app(build_app(), port=PORT)
