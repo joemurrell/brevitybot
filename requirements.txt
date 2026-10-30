@@ -15,7 +15,7 @@ redis==8.1.0
 requests==2.34.2
 soupsieve==3.0.3
 pytest==9.1.1
-pytest-asyncio==1.4.0
+pytest-asyncio==1.4.1
 typing_extensions==4.16.0
 urllib3==2.8.0
 yarl==1.25.1
