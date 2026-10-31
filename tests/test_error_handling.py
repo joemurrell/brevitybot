@@ -5,6 +5,7 @@ and graceful fallback behaviour — all without a real network connection.
 """
 import asyncio
 import json
+from urllib.parse import urlparse
 from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 
 import aiohttp
@@ -232,7 +233,8 @@ class TestFlickrErrorHandling:
         with patch("aiohttp.ClientSession", return_value=self._mock_flickr(data=data)):
             result = _run(get_random_flickr_jet("fake_key"))
         assert result is not None
-        assert "staticflickr.com" in result
+        host = urlparse(result).hostname
+        assert host is not None and (host == "staticflickr.com" or host.endswith(".staticflickr.com"))
         assert "123_abc_b.jpg" in result
 
 
