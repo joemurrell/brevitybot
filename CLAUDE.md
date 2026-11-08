@@ -29,7 +29,7 @@ Required environment variables (in `.env`):
 - `LOG_FORMAT` — `text` (default, plain message) or `json` (one JSON object per line with `extra={...}` fields)
 - `HEALTH_CHECK_PORT` — HTTP health check port, default `8080`
 - `STARTUP_DELAY` — Seconds to wait before connecting, default `0` (used on Railway to prevent rapid-restart rate limits)
-- `BACKUP_USER_ID` — Discord user ID that receives a daily gzipped-JSON DM of the non-rebuildable Redis keys (optional; backup disabled if unset)
+- `BACKUP_BUCKET`, `BACKUP_ENDPOINT`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY` — S3-compatible bucket (Railway Bucket) for the daily Redis backup; all four required or backup is disabled. Optional: `BACKUP_REGION` (default `auto`), `BACKUP_RETENTION_DAYS` (default `30`)
 - `USER_AGENT` — Custom UA for Wikipedia scraping (optional)
 
 ## Architecture
@@ -50,7 +50,7 @@ The entire bot is a single file: `brevitybot.py`. There are no modules, packages
 - `post_brevity_term` — runs every 5 minutes; reads channel map + disabled set + freq/last-posted in batched calls (`HGETALL` + `SMEMBERS` + 2× `MGET` = 4 calls regardless of guild count), then iterates the batched data to decide who's due.
 - `refresh_terms_daily` — runs every 24 hours, calls `update_brevity_terms()` (which wraps `parse_brevity_terms()` + atomic backup/replace + cache invalidation).
 - `log_bot_stats` — runs every hour, logs server count.
-- `backup_daily` — only if `BACKUP_USER_ID` set; every 24 h DMs that user a `.json.gz` of `export_irreplaceable()` (guild config, `used_terms`, greenie; **not** `brevity_terms`/`quiz:*`). `backup_cooldown` key (23 h) stops restart loops spamming DMs. Restore: `json.loads(gzip.decompress(...))`, then per key `{type,value}` write back with `SET`/`HSET`/`SADD`/`RPUSH` (list is stored head-first, so `RPUSH` preserves order).
+- `backup_daily` — only if the `BACKUP_*` bucket vars are set; every 24 h uploads `brevitybot-backup-YYYY-MM-DD.json.gz` (from `export_irreplaceable()`: guild config, `used_terms`, greenie; **not** `brevity_terms`/`quiz:*`) via boto3 in `asyncio.to_thread`, then prunes objects older than `BACKUP_RETENTION_DAYS` (only after a successful upload). `backup_cooldown` key (23 h) stops restart loops re-uploading. Restore: download the file, `json.loads(gzip.decompress(...))`, then per key `{type,value}` write back with `SET`/`HSET`/`SADD`/`RPUSH` (list is stored head-first, so `RPUSH` preserves order).
 
 **`tasks.loop` + `setup_hook` ordering (important).** `setup_hook()` runs after login but *before* the gateway connects, and an interval `tasks.loop` fires its first iteration immediately on `.start()`. So any loop that touches the Discord cache (`client.get_channel`, `client.guilds`, …) **must** declare a `@<loop>.before_loop` hook that awaits `client.wait_until_ready()` — otherwise its first tick sees an empty cache. `post_brevity_term` and `log_bot_stats` both have one; `refresh_terms_daily` doesn't need one (Wikipedia + Redis only). This ordering previously caused a real outage: the first tick found `get_channel()` → `None` for every guild and deleted valid configs (see below).
 
@@ -80,7 +80,7 @@ The entire bot is a single file: `brevitybot.py`. There are no modules, packages
 | `reloadterms_cooldown` | string (TTL) | Sentinel key with TTL — global cooldown for `/reloadterms` |
 | `active_quiz:{guild_id}` | string (TTL) | Per-guild concurrency lock (acquired via `SET NX EX`) for public quizzes |
 | `quiz_user_cooldown:{user_id}` | string (TTL) | Per-user 60s cooldown after starting a quiz |
-| `backup_cooldown` | string (TTL) | 23 h guard so `backup_daily` doesn't re-send on rapid restarts |
+| `backup_cooldown` | string (TTL) | 23 h guard so `backup_daily` doesn't re-upload on rapid restarts |
 | `quiz:{quiz_id}:meta` | string JSON (TTL) | Quiz state for restart-resumable summaries — guild_id, channel_id, deadline, options, correct indices, message ids |
 
 ### Slash command sync

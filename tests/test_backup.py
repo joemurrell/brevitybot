@@ -34,3 +34,20 @@ def test_export_irreplaceable():
     data = json.loads(gzip.decompress(blob))
     assert set(data) == {"post_channels", "disabled_posting", "post_freq:1", "greenie:1:9"}
     assert data["disabled_posting"] == {"type": "set", "value": ["a", "b"]}
+
+
+def test_upload_and_prune_deletes_only_old():
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import MagicMock
+
+    now = datetime.now(timezone.utc)
+    s3 = MagicMock()
+    s3.get_paginator.return_value.paginate.return_value = [{"Contents": [
+        {"Key": "brevitybot-backup-old.json.gz", "LastModified": now - timedelta(days=31)},
+        {"Key": "brevitybot-backup-new.json.gz", "LastModified": now - timedelta(days=1)},
+    ]}]
+    with patch("boto3.client", return_value=s3):
+        pruned = brevitybot._upload_and_prune(b"x", "brevitybot-backup-today.json.gz")
+    assert pruned == 1
+    s3.put_object.assert_called_once()
+    s3.delete_object.assert_called_once_with(Bucket=brevitybot.BACKUP_BUCKET, Key="brevitybot-backup-old.json.gz")

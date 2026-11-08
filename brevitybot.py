@@ -13,7 +13,6 @@ import logging
 import redis.asyncio as aioredis
 import json
 import gzip
-import io
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 import time
@@ -1920,7 +1919,15 @@ async def refresh_terms_daily():
     except Exception as e:
         logger.error("refresh_terms_daily: failed to refresh terms, will retry next cycle: %s", e)
 
-BACKUP_USER_ID = os.getenv("BACKUP_USER_ID")  # Discord user ID that receives the daily DM backup
+# S3-compatible bucket (Railway Bucket) for the daily backup. Disabled unless all are set.
+BACKUP_BUCKET = os.getenv("BACKUP_BUCKET")
+BACKUP_ENDPOINT = os.getenv("BACKUP_ENDPOINT")
+BACKUP_ACCESS_KEY_ID = os.getenv("BACKUP_ACCESS_KEY_ID")
+BACKUP_SECRET_ACCESS_KEY = os.getenv("BACKUP_SECRET_ACCESS_KEY")
+BACKUP_REGION = os.getenv("BACKUP_REGION", "auto")
+BACKUP_RETENTION_DAYS = int(os.getenv("BACKUP_RETENTION_DAYS", "30"))
+BACKUP_PREFIX = "brevitybot-backup-"
+BACKUP_ENABLED = all((BACKUP_BUCKET, BACKUP_ENDPOINT, BACKUP_ACCESS_KEY_ID, BACKUP_SECRET_ACCESS_KEY))
 # Keys that can't be rebuilt (brevity_terms re-scrapes; quiz:* is TTL scratch).
 BACKUP_PATTERNS = (
     CHANNEL_MAP_KEY, DISABLED_GUILDS_KEY,
@@ -1949,21 +1956,38 @@ async def export_irreplaceable() -> bytes:
     return gzip.compress(json.dumps(data).encode())
 
 
+def _upload_and_prune(blob: bytes, key: str) -> int:
+    """Blocking boto3 work (run via asyncio.to_thread): upload ``key``, delete
+    objects older than BACKUP_RETENTION_DAYS. Returns number pruned."""
+    import boto3  # lazy: only needed when backups are enabled
+
+    s3 = boto3.client(
+        "s3", endpoint_url=BACKUP_ENDPOINT, region_name=BACKUP_REGION,
+        aws_access_key_id=BACKUP_ACCESS_KEY_ID, aws_secret_access_key=BACKUP_SECRET_ACCESS_KEY,
+    )
+    s3.put_object(Bucket=BACKUP_BUCKET, Key=key, Body=blob)
+    cutoff = time.time() - BACKUP_RETENTION_DAYS * 86400
+    pruned = 0
+    # Only prune after a successful upload, so a failing upload never shrinks the history.
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BACKUP_BUCKET, Prefix=BACKUP_PREFIX):
+        for obj in page.get("Contents", []):
+            if obj["LastModified"].timestamp() < cutoff:
+                s3.delete_object(Bucket=BACKUP_BUCKET, Key=obj["Key"])
+                pruned += 1
+    return pruned
+
+
 @tasks.loop(hours=24)
 async def backup_daily():
-    # ponytail: DM to one user, 10MB file cap; move to an S3/R2 bucket if the export outgrows it.
-    # Cooldown key stops crash-loop restarts (loop fires on start) from spamming DMs.
+    # Cooldown key stops crash-loop restarts (loop fires on start) from re-uploading.
     try:
         if not await r.set("backup_cooldown", "1", nx=True, ex=23 * 3600):
             return
         try:
-            user = await client.fetch_user(int(BACKUP_USER_ID))
             blob = await export_irreplaceable()
-            await user.send(
-                "BrevityBot daily backup",
-                file=discord.File(io.BytesIO(blob), filename=f"brevitybot-backup-{time.strftime('%Y-%m-%d')}.json.gz"),
-            )
-            logger.info("backup_daily: sent %d bytes", len(blob))
+            key = f"{BACKUP_PREFIX}{time.strftime('%Y-%m-%d', time.gmtime())}.json.gz"
+            pruned = await asyncio.to_thread(_upload_and_prune, blob, key)
+            logger.info("backup_daily: uploaded %s (%d bytes), pruned %d old", key, len(blob), pruned)
         except Exception:
             await r.delete("backup_cooldown")  # allow retry on next tick/restart
             raise
@@ -1986,7 +2010,7 @@ async def log_bot_stats():
     if not refresh_terms_daily.is_running():
         logger.warning("refresh_terms_daily loop was not running; restarting it.")
         refresh_terms_daily.start()
-    if BACKUP_USER_ID and not backup_daily.is_running():
+    if BACKUP_ENABLED and not backup_daily.is_running():
         logger.warning("backup_daily loop was not running; restarting it.")
         backup_daily.start()
 
@@ -2080,11 +2104,11 @@ async def _bot_setup(bot: discord.Client):
         refresh_terms_daily.start()
     if not log_bot_stats.is_running():
         log_bot_stats.start()
-    if BACKUP_USER_ID:
+    if BACKUP_ENABLED:
         if not backup_daily.is_running():
             backup_daily.start()
     else:
-        logger.warning("BACKUP_USER_ID not set; daily backup disabled")
+        logger.warning("BACKUP_* bucket settings not set; daily backup disabled")
 
     # Start health check HTTP server for Railway. Bound here in setup_hook
     # rather than on_ready so a websocket reconnect doesn't try to rebind
