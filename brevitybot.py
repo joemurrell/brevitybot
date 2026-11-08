@@ -12,6 +12,8 @@ import re
 import logging
 import redis.asyncio as aioredis
 import json
+import gzip
+import io
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 import time
@@ -1918,6 +1920,57 @@ async def refresh_terms_daily():
     except Exception as e:
         logger.error("refresh_terms_daily: failed to refresh terms, will retry next cycle: %s", e)
 
+BACKUP_USER_ID = os.getenv("BACKUP_USER_ID")  # Discord user ID that receives the daily DM backup
+# Keys that can't be rebuilt (brevity_terms re-scrapes; quiz:* is TTL scratch).
+BACKUP_PATTERNS = (
+    CHANNEL_MAP_KEY, DISABLED_GUILDS_KEY,
+    f"{FREQ_KEY_PREFIX}*", f"{LAST_POSTED_KEY_PREFIX}*", "used_terms:*", "greenie:*",
+)
+
+
+async def export_irreplaceable() -> bytes:
+    """Gzipped JSON ``{key: {"type": ..., "value": ...}}`` of every key in BACKUP_PATTERNS."""
+    data: dict[str, dict[str, Any]] = {}
+    for pattern in BACKUP_PATTERNS:
+        async for key in r.scan_iter(match=pattern, count=100):
+            t = await r.type(key)
+            if t == "string":
+                v = await r.get(key)
+            elif t == "hash":
+                v = await r.hgetall(key)
+            elif t == "set":
+                v = sorted(await r.smembers(key))
+            elif t == "list":
+                v = await r.lrange(key, 0, -1)
+            else:
+                continue
+            if v is not None:  # key may expire/vanish between scan and read
+                data[key] = {"type": t, "value": v}
+    return gzip.compress(json.dumps(data).encode())
+
+
+@tasks.loop(hours=24)
+async def backup_daily():
+    # ponytail: DM to one user, 10MB file cap; move to an S3/R2 bucket if the export outgrows it.
+    # Cooldown key stops crash-loop restarts (loop fires on start) from spamming DMs.
+    try:
+        if not await r.set("backup_cooldown", "1", nx=True, ex=23 * 3600):
+            return
+        try:
+            user = await client.fetch_user(int(BACKUP_USER_ID))
+            blob = await export_irreplaceable()
+            await user.send(
+                "BrevityBot daily backup",
+                file=discord.File(io.BytesIO(blob), filename=f"brevitybot-backup-{time.strftime('%Y-%m-%d')}.json.gz"),
+            )
+            logger.info("backup_daily: sent %d bytes", len(blob))
+        except Exception:
+            await r.delete("backup_cooldown")  # allow retry on next tick/restart
+            raise
+    except Exception as e:
+        logger.error("backup_daily: failed, will retry next cycle: %s", e)
+
+
 @tasks.loop(hours=1)
 async def log_bot_stats():
     logger.info("BrevityBot Statistics: Servers: %d", len(client.guilds))
@@ -1933,6 +1986,9 @@ async def log_bot_stats():
     if not refresh_terms_daily.is_running():
         logger.warning("refresh_terms_daily loop was not running; restarting it.")
         refresh_terms_daily.start()
+    if BACKUP_USER_ID and not backup_daily.is_running():
+        logger.warning("backup_daily loop was not running; restarting it.")
+        backup_daily.start()
 
 
 @log_bot_stats.before_loop
@@ -2024,6 +2080,11 @@ async def _bot_setup(bot: discord.Client):
         refresh_terms_daily.start()
     if not log_bot_stats.is_running():
         log_bot_stats.start()
+    if BACKUP_USER_ID:
+        if not backup_daily.is_running():
+            backup_daily.start()
+    else:
+        logger.warning("BACKUP_USER_ID not set; daily backup disabled")
 
     # Start health check HTTP server for Railway. Bound here in setup_hook
     # rather than on_ready so a websocket reconnect doesn't try to rebind
