@@ -1960,10 +1960,12 @@ def _upload_and_prune(blob: bytes, key: str) -> int:
     """Blocking boto3 work (run via asyncio.to_thread): upload ``key``, delete
     objects older than BACKUP_RETENTION_DAYS. Returns number pruned."""
     import boto3  # lazy: only needed when backups are enabled
+    from botocore.config import Config
 
     s3 = boto3.client(
         "s3", endpoint_url=BACKUP_ENDPOINT, region_name=BACKUP_REGION,
         aws_access_key_id=BACKUP_ACCESS_KEY_ID, aws_secret_access_key=BACKUP_SECRET_ACCESS_KEY,
+        config=Config(s3={"addressing_style": "virtual"}),  # Railway buckets are virtual-host only
     )
     s3.put_object(Bucket=BACKUP_BUCKET, Key=key, Body=blob)
     cutoff = time.time() - BACKUP_RETENTION_DAYS * 86400
